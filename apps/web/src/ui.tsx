@@ -21,12 +21,15 @@ function pageFromLocation(): Page {
   const legacyRoute = window.location.pathname === '/' && window.location.hash.startsWith('#/')
     ? window.location.hash.slice(1).split('?')[0]
     : '';
+  if (legacyRoute) window.history.replaceState(window.history.state, '', legacyRoute + window.location.search);
   const route = legacyRoute || window.location.pathname.replace(/\/$/, '') || '/';
   return (Object.entries(pageRoutes).find(([, value]) => value === route)?.[0] as RoutePage | undefined) ?? 'notFound';
 }
 
 function missingApiError(): Error | null {
-  return api ? null : new Error('Falta VITE_API_URL. Configúrala en Vercel con la URL HTTPS de tu backend en Render y vuelve a desplegar.');
+  // Production may intentionally use a same-origin /api proxy, so an empty
+  // VITE_API_URL is valid there. Local development still needs an API target.
+  return api || import.meta.env.PROD ? null : new Error('Falta VITE_API_URL. Configura la URL del backend o un proxy /api en el mismo dominio.');
 }
 
 async function getJSON<T>(route: string): Promise<T> {
@@ -34,7 +37,7 @@ async function getJSON<T>(route: string): Promise<T> {
   if (configError) throw configError;
   let response: Response;
   try { response = await fetch(api + route, {credentials: 'include'}); }
-  catch { throw new Error('No se pudo conectar con el backend. Revisa VITE_API_URL, que Render esté activo y que WEB_ORIGIN permita este dominio de Vercel.'); }
+  catch { throw new Error('No se pudo conectar con el backend. Comprueba que esté activo y que VITE_API_URL o el proxy /api apunten al servidor correcto.'); }
   if (!response.ok) throw new Error((await response.json() as {error?: string}).error ?? response.statusText);
   return response.json() as Promise<T>;
 }
@@ -44,12 +47,12 @@ async function postJSON<T>(route: string, body: unknown): Promise<T> {
   if (configError) throw configError;
   let csrfResponse: Response;
   try { csrfResponse = await fetch(api + '/api/auth/csrf', {credentials: 'include'}); }
-  catch { throw new Error('No se pudo conectar con el backend. Revisa VITE_API_URL, que Render esté activo y que WEB_ORIGIN permita este dominio de Vercel.'); }
-  if (!csrfResponse.ok) throw new Error('El backend no pudo preparar la sesión segura. Revisa su configuración en Render.');
+  catch { throw new Error('No se pudo conectar con el backend. Comprueba que esté activo y que VITE_API_URL o el proxy /api apunten al servidor correcto.'); }
+  if (!csrfResponse.ok) throw new Error('El backend no pudo preparar la sesión segura. Revisa su configuración.');
   const {csrfToken} = await csrfResponse.json() as {csrfToken: string};
   let response: Response;
   try { response = await fetch(api + route, {method: 'POST', credentials: 'include', headers: {'Content-Type': 'application/json', 'X-CSRF-Token': csrfToken}, body: JSON.stringify(body)}); }
-  catch { throw new Error('No se pudo conectar con el backend. Revisa VITE_API_URL, que Render esté activo y que WEB_ORIGIN permita este dominio de Vercel.'); }
+  catch { throw new Error('No se pudo conectar con el backend. Comprueba que esté activo y que VITE_API_URL o el proxy /api apunten al servidor correcto.'); }
   const result = await response.json() as T & {error?: string};
   if (!response.ok) throw new Error(result.error ?? response.statusText);
   return result;

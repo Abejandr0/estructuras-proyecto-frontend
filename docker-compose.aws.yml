@@ -27,7 +27,8 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
       args:
-        VITE_API_URL: ""
+        VITE_API_URL: ${VITE_API_URL:-}
+        VITE_SITE_URL: ${VITE_SITE_URL:-https://aiverse-alejandro.duckdns.org}
     restart: unless-stopped
     depends_on:
       - backend
