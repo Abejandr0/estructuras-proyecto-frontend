@@ -286,12 +286,19 @@ export default function App() {
 
   return <main className={dark ? 'app dark' : 'app'}>
     <header>
-      <div className="brand"><span className="logo">A</span><div><b>AIVerse</b><small>{health?.root ?? 'Conectando al repositorio…'}</small></div></div>
+      <div className="brand"><span className="logo">◈</span><div><b>AIVerse</b><small>{health?.root ?? 'Conectando al repositorio…'}</small></div></div>
       <div className="header-right"><span className={error ? 'connection offline' : 'connection'}>● {error ? 'Sin conexión' : 'Backend conectado'}</span><span className="branch">⌘ {status.branch}</span>{user&&<button className="workspace-nav" onClick={()=>setPage('settings')}>Configuración</button>}<button className="theme-cycle" onClick={cycleTheme} aria-label={`Tema ${theme==='system'?'automático':theme}; cambiar tema`}>{theme==='system'?'◐':dark?'☀':'☾'}<small>{theme==='system'?'Sistema':dark?'Oscuro':'Claro'}</small></button>{user&&<button className="workspace-account" onClick={()=>setPage('account')}>@{user.username}</button>}</div>
     </header>
     {error && <div className="error-banner">No se pudo conectar con AIVerse: {error}. Ejecuta <code>npm run dev:server</code>.</div>}
     <section className="workspace">
       <aside className="sidebar">
+        <div className="workspace-side-nav" aria-label="Navegación del espacio">
+          <button className="selected" onClick={()=>setPage('workspace')}><span>⌂</span> Resumen</button>
+          <button onClick={()=>setPage('feed')}><span>◉</span> Comunidad</button>
+          <button onClick={()=>setPage('docs')}><span>▤</span> Guías y recursos</button>
+          <button onClick={()=>setPage('prs')}><span>⑂</span> Pull requests</button>
+        </div>
+        <div className="workspace-sidebar-rule"/>
         <div className="side-title">EXPLORADOR <span>{allPaths.length}</span></div>
         {allPaths.map(file => { const change = changes.find(item => item.path === file); return <button className={selected === file ? 'file active' : 'file'} key={file} onClick={() => setSelected(file)}><span className={`dot ${change?.status ?? 'clean'}`}/>{file}</button>; })}
         {!allPaths.length && <p className="muted">{loading ? 'Cargando…' : 'Añade archivos para comenzar'}</p>}
@@ -299,8 +306,21 @@ export default function App() {
         {branches.map(branch => <div className={branch === status.branch ? 'file current' : 'file'} key={branch}>◉ {branch}</div>)}
       </aside>
       <section className="center">
+        <div className="workspace-overview">
+          <div className="workspace-greeting">
+            <div><p className="workspace-kicker">TU ESPACIO DE TRABAJO</p><h1>{health?.root?.split('/').filter(Boolean).pop() || 'Tu proyecto'}</h1><p>Todo lo que necesitas para entender y hacer avanzar tu código.</p></div>
+            <div className="workspace-quick-actions"><button onClick={()=>setPage('feed')}>Explorar comunidad <span>↗</span></button><button className="quick-primary" onClick={()=>setPage('docs')}>Abrir guías <span>→</span></button></div>
+          </div>
+          <div className="workspace-metrics">
+            <article><span className="metric-icon violet">⌘</span><div><b>{log.length}</b><small>Commits</small></div></article>
+            <article><span className="metric-icon amber">✎</span><div><b>{changes.length}</b><small>Cambios pendientes</small></div></article>
+            <article><span className="metric-icon green">▤</span><div><b>{files.length}</b><small>Archivos versionados</small></div></article>
+            <article className="workspace-branch-card"><span>RAMA ACTUAL</span><b>⑂ {status.branch}</b><small>{error ? 'Sincronización pausada' : 'Repositorio conectado'}</small></article>
+          </div>
+          <div className="workspace-section-label"><div><span className="section-spark">✦</span><b>Actividad del proyecto</b><small> Sigue el contexto de cada cambio</small></div><span className="activity-count">{log.length} en el historial</span></div>
+        </div>
         <div className="graph">
-          <div className="panel-head"><span>Grafo de commits</span><small>{log.length} confirmaciones</small></div>
+          <div className="panel-head"><span>Historial de commits</span><small>Rama {status.branch}</small></div>
           <svg viewBox={`0 0 640 ${Math.max(150, log.length * 74)}`} preserveAspectRatio="xMinYMin meet">
             {log.length > 1 && <line x1="32" y1="36" x2="32" y2={36 + (log.length - 1) * 74} stroke="#6971ff" strokeWidth="3"/>}
             {log.map((item, index) => <motion.g key={item.hash} initial={{opacity: 0, x: -12}} animate={{opacity: 1, x: 0}} transition={{delay: index * .06}}><circle cx="32" cy={36 + index * 74} r="9" fill="#746bff"/><text x="56" y={32 + index * 74} className="commit-msg">{item.commit.message.slice(0, 56)}</text><text x="56" y={51 + index * 74} className="commit-meta">{item.hash.slice(0, 8)} · {new Date(item.commit.date).toLocaleString('es-CO')}</text></motion.g>)}
@@ -313,20 +333,22 @@ export default function App() {
         </div>
       </section>
       <aside className="right">
-        <div className="panel-head">Asistente IA <span className="online">● {health?.provider ?? 'heuristic'}</span></div>
-        <p className="muted">La revisión usa el diff real del árbol de trabajo.</p>
+        <div className="ai-panel-heading"><span className="ai-spark">✦</span><div><b>Tu copiloto</b><small>IA conectada a este proyecto</small></div><span className="online">●</span></div>
+        <div className="ai-welcome"><span>✧</span><b>¿Qué quieres descubrir?</b><p>Pregunta sobre tus cambios o pide una revisión. La IA utiliza el contexto real del repositorio.</p></div>
+        <div className="ai-action-label">ACCIONES RÁPIDAS</div>
         <button className="action" onClick={() => void requestAI('review')} disabled={!changes.length}>Revisar {changes.length} cambio{changes.length === 1 ? '' : 's'}</button>
-        <button className="action secondary" onClick={() => void requestAI('commit-msg')} disabled={!changes.length}>Sugerir mensaje</button>
-        <label className="ai-ask-label">Pregunta sobre tu código<textarea value={aiQuestion} onChange={event=>setAiQuestion(event.target.value)} maxLength={1000} placeholder="Explícame este cambio, busca casos límite…"/></label>
-        <button className="action" onClick={() => void requestAI('ask')} disabled={!aiQuestion.trim()}>Preguntar a AIVerse ↗</button>
-        <div className={`task-state ${aiTask?.state ?? ''}`}>{aiTask ? `${aiTask.state} · intento ${aiTask.attempts}` : 'Sin tareas recientes'}</div>
-        <pre className="ai-result">{aiTask?.result ?? aiTask?.error ?? 'La respuesta aparecerá aquí.'}</pre>
+        <button className="action secondary" onClick={() => void requestAI('commit-msg')} disabled={!changes.length}>✦　Sugerir mensaje de commit</button>
+        <label className="ai-ask-label">PREGÚNTALE A AIVERSE<textarea value={aiQuestion} onChange={event=>setAiQuestion(event.target.value)} maxLength={1000} placeholder="Explícame este cambio, busca casos límite…"/></label>
+        <button className="action ai-submit" onClick={() => void requestAI('ask')} disabled={!aiQuestion.trim()}>Enviar pregunta <span>↑</span></button>
+        <div className={`task-state ${aiTask?.state ?? ''}`}>{aiTask ? `${aiTask.state} · intento ${aiTask.attempts}` : 'Las respuestas aparecerán aquí'}</div>
+        {aiTask&&<pre className="ai-result">{aiTask.result ?? aiTask.error ?? 'Preparando respuesta…'}</pre>}
+        <div className="ai-provider-note"><span>✧</span> Modelo: {health?.provider ?? 'AIVerse'}</div>
         <div className="inspector"><div className="panel-head">Data Structure Inspector</div><small>HashTable · buckets de objetos</small><div className="buckets">{buckets.slice(0, 32).map((count, index) => <div key={index} title={`Bucket ${index}: ${count}`} style={{height: Math.max(4, count * 12)}}/>)}</div><small>{buckets.length} buckets · {files.length} archivos confirmados</small></div>
         <div className="panel-head state-heading">Estado</div><div className="stats"><span>{status.staged.length}<small>staged</small></span><span>{status.modified.length}<small>modificados</small></span><span>{status.untracked.length}<small>nuevos</small></span></div>
       </aside>
     </section>
-    <section className="terminal"><div className="terminal-head"><span>TERMINAL</span><small>Tu flujo, desde la terminal</small></div><div className="terminal-body"><div className="terminal-history">{output.slice(0, 5).map((line, index) => <div key={index}>{line}</div>)}</div><div className="prompt"><b>aiverse ❯</b><input value={terminal} onChange={event => setTerminal(event.target.value)} onKeyDown={event => event.key === 'Enter' && void run()} placeholder="status, add ., commit -m mensaje"/><button onClick={() => void run()}>↵</button></div></div></section>
-    <footer className="workspace-footer"><span>◈ AIVerse · {changes.length} cambios · rama {status.branch}</span><div><button onClick={()=>setPage('home')}>Inicio</button><button onClick={()=>setPage('feed')}>Explorar</button><button onClick={()=>setPage('terms')}>Términos</button><button onClick={()=>setPage('privacy')}>Privacidad</button></div><span>● {error ? 'Sin conexión' : 'Listo'}</span></footer>
+    <section className="terminal"><div className="terminal-head"><span><i/> TERMINAL</span><small>Tu flujo, desde la terminal</small><button onClick={()=>setPage('docs')}>Ver comandos disponibles ↗</button></div><div className="terminal-body"><div className="terminal-history">{output.slice(0, 5).map((line, index) => <div key={index}>{line}</div>)}</div><div className="prompt"><b>aiverse ❯</b><input value={terminal} onChange={event => setTerminal(event.target.value)} onKeyDown={event => event.key === 'Enter' && void run()} placeholder="status, add ., commit -m mensaje"/><button onClick={() => void run()}>↵</button></div></div></section>
+    <footer className="workspace-footer"><span>◈ AIVerse <i/> {changes.length} cambios · rama {status.branch}</span><div><button onClick={()=>setPage('home')}>Inicio</button><button onClick={()=>setPage('feed')}>Comunidad</button><button onClick={()=>setPage('docs')}>Guías</button><button onClick={()=>setPage('terms')}>Términos</button><button onClick={()=>setPage('privacy')}>Privacidad</button></div><span>● {error ? 'Sin conexión' : 'Todo actualizado'}</span></footer>
   </main>;
 }
 
