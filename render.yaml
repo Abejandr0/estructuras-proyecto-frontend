@@ -21,6 +21,8 @@ services:
         value: gemini
       - key: AI_ALLOW_NETWORK
         value: "false"
+      - key: ENABLE_SHARED_REPOSITORY_API
+        value: "false"
       - key: GEMINI_MODEL
         value: gemini-2.5-flash
       - key: MONGODB_URI

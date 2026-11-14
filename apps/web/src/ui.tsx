@@ -1,25 +1,28 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
 import type {FormEvent} from 'react';
-import {motion} from 'framer-motion';
 
 type Commit = {hash: string; commit: {message: string; date: string; parents: string[]}};
 type Entry = {path: string; hash: string};
 type Status = {branch: string; staged: Entry[]; untracked: string[]; modified: string[]};
 type Change = {path: string; status: 'modified' | 'deleted' | 'untracked'; oldText: string; newText: string; lines: string[]};
 type AITask = {id: string; kind: string; state: 'pending' | 'processing' | 'ready' | 'error'; result?: string; error?: string; attempts: number};
-type Health = {ok: boolean; root: string; provider: string};
+type Health = {ok: boolean; root?: string; provider: string; sharedRepositoryApiEnabled: boolean};
 
 const api = (import.meta.env.VITE_API_URL ?? (import.meta.env.DEV ? 'http://127.0.0.1:4179' : '')).replace(/\/$/, '');
 const eventsUrl = new URL('/api/events', api || window.location.origin);
 eventsUrl.protocol = eventsUrl.protocol === 'https:' ? 'wss:' : 'ws:';
 const wsUrl = eventsUrl.toString();
 
-type Page = 'home'|'feed'|'docs'|'workspace'|'login'|'register'|'account'|'settings'|'prs'|'pricing'|'terms'|'privacy';
+type Page = 'home'|'feed'|'docs'|'workspace'|'login'|'register'|'account'|'settings'|'prs'|'pricing'|'terms'|'privacy'|'legal'|'cookies'|'notFound';
 type Theme = 'system'|'light'|'dark';
-const pageRoutes: Record<Page, string> = {home: '/', feed: '/explore', docs: '/docs', workspace: '/workspace', login: '/login', register: '/signup', account: '/account', settings: '/settings', prs: '/pull-requests', pricing: '/pricing', terms: '/terms', privacy: '/privacy'};
-function pageFromHash(): Page {
-  const route = window.location.hash.replace(/^#/, '') || '/';
-  return (Object.entries(pageRoutes).find(([, value]) => value === route)?.[0] as Page | undefined) ?? 'home';
+type RoutePage = Exclude<Page, 'notFound'>;
+const pageRoutes: Record<RoutePage, string> = {home: '/', feed: '/explore', docs: '/docs', workspace: '/workspace', login: '/login', register: '/signup', account: '/account', settings: '/settings', prs: '/pull-requests', pricing: '/pricing', terms: '/terms', privacy: '/privacy', legal: '/aviso-legal', cookies: '/cookies'};
+function pageFromLocation(): Page {
+  const legacyRoute = window.location.pathname === '/' && window.location.hash.startsWith('#/')
+    ? window.location.hash.slice(1).split('?')[0]
+    : '';
+  const route = legacyRoute || window.location.pathname.replace(/\/$/, '') || '/';
+  return (Object.entries(pageRoutes).find(([, value]) => value === route)?.[0] as RoutePage | undefined) ?? 'notFound';
 }
 
 function missingApiError(): Error | null {
@@ -53,8 +56,12 @@ async function postJSON<T>(route: string, body: unknown): Promise<T> {
 }
 
 export default function App() {
-  const [page, setCurrentPage] = useState<Page>(pageFromHash);
+  const [page, setCurrentPage] = useState<Page>(pageFromLocation);
   const [feed, setFeed] = useState<Array<{id:string;name:string;description:string;stars_count:number;username:string;created_at?:string}>>([]);
+  const [feedLoading, setFeedLoading] = useState(true);
+  const [feedError, setFeedError] = useState('');
+  const [postsLoading, setPostsLoading] = useState(true);
+  const [postsError, setPostsError] = useState('');
   const [user, setUser] = useState<{username:string;display_name:string;email:string}|null>(null);
   const [formError, setFormError] = useState('');
   const [authSubmitting, setAuthSubmitting] = useState(false);
@@ -90,15 +97,15 @@ export default function App() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const dark = theme === 'dark' || (theme === 'system' && systemDark);
-  const setPage = (nextPage: Page) => {
+  const setPage = (nextPage: RoutePage) => {
     const destination = nextPage === 'settings' && !user ? 'login' : nextPage;
-    window.history.pushState({page: destination}, '', `#${pageRoutes[destination]}`);
+    window.history.pushState({page: destination}, '', pageRoutes[destination]);
     setCurrentPage(destination);
     window.scrollTo({top: 0, behavior: 'auto'});
   };
 
   useEffect(() => {
-    const updatePage = () => setCurrentPage(pageFromHash());
+    const updatePage = () => setCurrentPage(pageFromLocation());
     window.addEventListener('popstate', updatePage);
     return () => window.removeEventListener('popstate', updatePage);
   }, []);
@@ -118,38 +125,110 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [nextLog, nextFiles, nextStatus, nextBranches, nextChanges, structures, nextHealth] = await Promise.all([
+      const nextHealth = await getJSON<Health>('/api/health');
+      setHealth(nextHealth);
+      if (!nextHealth.sharedRepositoryApiEnabled) {
+        setError('El acceso al repositorio compartido está desactivado en esta instancia pública.');
+        return;
+      }
+      const [nextLog, nextFiles, nextStatus, nextBranches, nextChanges, structures] = await Promise.all([
         getJSON<Commit[]>('/api/repo/log'), getJSON<Entry[]>('/api/repo/tree'), getJSON<Status>('/api/repo/status'),
         getJSON<string[]>('/api/repo/branches'), getJSON<Change[]>('/api/repo/diff'),
-        getJSON<{objectBuckets: number[]}>('/api/structures'), getJSON<Health>('/api/health'),
+        getJSON<{objectBuckets: number[]}>('/api/structures'),
       ]);
       setLog(nextLog); setFiles(nextFiles); setStatus(nextStatus); setBranches(nextBranches);
-      setChanges(nextChanges); setBuckets(structures.objectBuckets); setHealth(nextHealth); setError('');
+      setChanges(nextChanges); setBuckets(structures.objectBuckets); setError('');
     } catch (refreshError) {
       setError(refreshError instanceof Error ? refreshError.message : String(refreshError));
     } finally { setLoading(false); }
+  }, []);
+
+  const loadFeed = useCallback(async () => {
+    setFeedLoading(true);
+    setFeedError('');
+    try { const result = await getJSON<{repositories: typeof feed}>('/api/feed'); setFeed(result.repositories); }
+    catch (cause) { setFeedError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setFeedLoading(false); }
+  }, []);
+
+  const loadPosts = useCallback(async () => {
+    setPostsLoading(true);
+    setPostsError('');
+    try { const result = await getJSON<{posts: typeof communityPosts}>('/api/feed/posts'); setCommunityPosts(result.posts); }
+    catch (cause) { setPostsError(cause instanceof Error ? cause.message : String(cause)); }
+    finally { setPostsLoading(false); }
   }, []);
 
   useEffect(() => {
     void refresh();
     void getJSON('/api/auth/csrf').catch(()=>undefined);
     void getJSON<{user: typeof user}>('/api/auth/me').then(result=>setUser(result.user)).catch(()=>setUser(null)).finally(()=>setAuthChecked(true));
-    void getJSON<{repositories: typeof feed}>('/api/feed').then(result=>setFeed(result.repositories)).catch(()=>undefined);
-    void getJSON<{posts: typeof communityPosts}>('/api/feed/posts').then(result=>setCommunityPosts(result.posts)).catch(()=>undefined);
+    void loadFeed();
+    void loadPosts();
     void getJSON<{enabled:boolean}>('/api/billing/status').then(result=>setBillingEnabled(result.enabled)).catch(()=>setBillingEnabled(false));
-    if (!api) return;
-    const socket = new WebSocket(wsUrl);
-    socket.onmessage = event => {
-      const message = JSON.parse(event.data as string) as {type?: string; task?: AITask};
-      if (message.type === 'ai-task' && message.task) setAiTask(current => current?.id === message.task?.id ? message.task ?? current : current);
-      if (message.type === 'filesystem') void refresh();
-    };
-    return () => socket.close();
-  }, [refresh]);
+  }, [refresh, loadFeed, loadPosts]);
+
+  useEffect(() => {
+    if (!api || (!user && !import.meta.env.DEV)) return;
+    let socket: WebSocket | undefined;
+    let cancelled = false;
+    void getJSON<Health>('/api/health').then(result => {
+      if (!result.sharedRepositoryApiEnabled || cancelled) return;
+      socket = new WebSocket(wsUrl);
+      socket.onmessage = event => {
+        const message = JSON.parse(event.data as string) as {type?: string; task?: AITask};
+        if (message.type === 'ai-task' && message.task) setAiTask(current => current?.id === message.task?.id ? message.task ?? current : current);
+        if (message.type === 'filesystem') void refresh();
+      };
+    }).catch(()=>undefined);
+    return () => { cancelled = true; socket?.close(); };
+  }, [user, refresh]);
 
   useEffect(() => {
     if (authChecked && (page === 'settings' || page === 'account') && !user) setPage('login');
   }, [authChecked, page, user]);
+
+  useEffect(() => {
+    const metadata: Record<Page, {title: string; description: string}> = {
+      home: {title: 'AIVerse — Tu código avanza. Tu equipo entiende por qué.', description: 'Versionamiento claro, colaboración de equipo y asistencia de IA bajo tu control.'},
+      feed: {title: 'Explora proyectos | AIVerse', description: 'Descubre repositorios públicos, conoce a sus creadores y encuentra ideas para tu próximo proyecto.'},
+      docs: {title: 'Guías de AIVerse | Documentación', description: 'Aprende a crear repositorios, trabajar con commits y revisar cambios con AIVerse.'},
+      workspace: {title: 'Espacio de trabajo | AIVerse', description: 'Consulta el historial y los cambios de tu proyecto en AIVerse.'},
+      login: {title: 'Iniciar sesión | AIVerse', description: 'Continúa trabajando en tus proyectos con AIVerse.'},
+      register: {title: 'Crear cuenta | AIVerse', description: 'Crea tu espacio de desarrollo y empieza a colaborar con AIVerse.'},
+      account: {title: 'Mi cuenta | AIVerse', description: 'Consulta la información de tu cuenta de AIVerse.'},
+      settings: {title: 'Configuración | AIVerse', description: 'Personaliza tus preferencias de idioma y tema en AIVerse.'},
+      prs: {title: 'Pull requests | AIVerse', description: 'Revisa cambios de código y conversa con contexto en AIVerse.'},
+      pricing: {title: 'Planes y precios | AIVerse', description: 'Compara los planes de AIVerse y elige el espacio de trabajo que necesitas.'},
+      terms: {title: 'Términos de servicio | AIVerse', description: 'Consulta las condiciones de uso del servicio AIVerse.'},
+      privacy: {title: 'Política de privacidad | AIVerse', description: 'Conoce qué datos procesa AIVerse y cómo se usan.'},
+      legal: {title: 'Aviso legal | AIVerse', description: 'Información sobre el servicio AIVerse y su operador.'},
+      cookies: {title: 'Aviso de cookies | AIVerse', description: 'Información sobre las cookies necesarias que utiliza AIVerse.'},
+      notFound: {title: 'Página no encontrada | AIVerse', description: 'La página que buscas no está disponible.'},
+    };
+    const content = metadata[page];
+    document.title = content.title;
+    const description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+    if (description) description.content = content.description;
+    for (const [selector, value] of [
+      ['meta[property="og:title"]', content.title],
+      ['meta[property="og:description"]', content.description],
+      ['meta[name="twitter:title"]', content.title],
+      ['meta[name="twitter:description"]', content.description],
+    ] as const) {
+      const tag = document.querySelector<HTMLMetaElement>(selector);
+      if (tag) tag.content = value;
+    }
+    const robots = document.querySelector<HTMLMetaElement>('meta[name="robots"]');
+    if (robots) robots.content = ['workspace', 'login', 'register', 'account', 'settings', 'notFound'].includes(page) ? 'noindex, nofollow' : 'index, follow';
+    let canonical = document.querySelector<HTMLLinkElement>('link[rel="canonical"]');
+    if (!canonical) {
+      canonical = document.createElement('link');
+      canonical.rel = 'canonical';
+      document.head.append(canonical);
+    }
+    canonical.href = `${window.location.origin}${page === 'notFound' ? '/' : pageRoutes[page]}`;
+  }, [page]);
 
   const selectedChange = useMemo(() => changes.find(change => change.path === selected), [changes, selected]);
   const allPaths = useMemo(() => [...new Set([...files.map(file => file.path), ...changes.map(change => change.path)])].sort(), [files, changes]);
@@ -249,19 +328,21 @@ export default function App() {
   ];
   const passwordValid = passwordChecks.every(check => check.valid) && !/password|contraseña/i.test(passwordValue);
 
+  if (page === 'notFound') return <main className={dark?'app marketing-app dark':'app marketing-app'}><SiteHeader page={page} user={user} navigate={setPage}/><section className="not-found-page"><p className="eyebrow">ERROR 404 · RUTA NO DISPONIBLE</p><span className="not-found-code" aria-hidden="true">404</span><h1>No encontramos esta página.</h1><p>Puede que el enlace haya cambiado o que la dirección esté escrita de forma incorrecta.</p><button className="action" onClick={()=>setPage('home')}>Volver al inicio <span>→</span></button></section><SiteFooter navigate={setPage}/></main>;
+
   if (page === 'feed') return <main className={dark?'app marketing-app dark':'app marketing-app'}>
     <SiteHeader page={page} user={user} navigate={setPage}/>
-    <section className="explore-hero"><p className="eyebrow">COMUNIDAD AIVERSE</p><h1>Explora proyectos<br/><span>hechos por desarrolladores.</span></h1><p>Busca repositorios públicos, conoce quién los crea y encuentra ideas para tu próximo proyecto.</p><div className="explore-search"><span>⌕</span><input value={feedSearch} onChange={event=>setFeedSearch(event.target.value)} placeholder="Buscar proyectos, personas o tecnologías" aria-label="Buscar repositorios"/><button onClick={()=>setFeedSearch('')} disabled={!feedSearch}>Limpiar</button></div><div className="explore-metrics"><span><b>{feed.length}</b> repositorios públicos</span><span><b>{new Set(feed.map(item=>item.username)).size}</b> desarrolladores</span><span>Actualizado desde la comunidad</span></div></section>
-    <section className="explore-content"><div className="community-layout"><div><div className="community-composer"><p className="eyebrow">COMPARTE CON LA COMUNIDAD</p><h2>¿En qué estás trabajando?</h2>{user?<form onSubmit={event=>void publishPost(event)}><textarea maxLength={1200} value={postText} onChange={event=>setPostText(event.target.value)} placeholder="Comparte un avance, una pregunta o algo que aprendiste…"/><div><small>{postText.length}/1200</small><button className="action" disabled={postSubmitting||!postText.trim()}>{postSubmitting?'Publicando…':'Publicar'}</button></div>{postError&&<p className="form-error">{postError}</p>}</form>:<><p>Inicia sesión para compartir avances, pedir ayuda y conversar sobre código.</p><button className="action" onClick={()=>setPage('login')}>Iniciar sesión para publicar</button></>}</div><div className="community-posts"><p className="eyebrow">CONVERSACIÓN RECIENTE</p>{communityPosts.length?communityPosts.map(post=><article className="community-post" key={post.id}><div className="post-avatar">{post.display_name?.[0]?.toUpperCase()||'A'}</div><div><strong>{post.display_name||post.username}</strong><small>@{post.username} · {new Date(post.created_at).toLocaleString('es-CO')}</small><p>{post.text}</p></div></article>):<div className="explore-empty"><h3>Inicia la conversación</h3><p>Comparte tu primer avance o una pregunta técnica para activar la comunidad.</p></div>}</div></div><div><div className="explore-heading"><div><p className="eyebrow">DIRECTORIO</p><h2>Proyectos para explorar</h2><p>Repositorios públicos de la comunidad.</p></div><label className="sort-select">Orden<select value={feedSort} onChange={event=>setFeedSort(event.target.value as 'popular'|'recent')}><option value="popular">Populares</option><option value="recent">Recientes</option></select></label></div>
+    <section className="explore-hero"><p className="eyebrow">COMUNIDAD AIVERSE</p><h1>Explora proyectos<br/><span>hechos por desarrolladores.</span></h1><p>Busca repositorios públicos, conoce quién los crea y encuentra ideas para tu próximo proyecto.</p><div className="explore-search"><span>⌕</span><input value={feedSearch} onChange={event=>setFeedSearch(event.target.value)} placeholder="Buscar proyectos, personas o tecnologías" aria-label="Buscar repositorios"/><button onClick={()=>setFeedSearch('')} disabled={!feedSearch}>Limpiar</button></div><div className="explore-metrics" aria-live="polite"><span><b>{feedLoading?'…':feed.length}</b> repositorios públicos</span><span><b>{feedLoading?'…':new Set(feed.map(item=>item.username)).size}</b> desarrolladores</span><span>Actualizado desde la comunidad</span></div></section>
+    <section className="explore-content"><div className="community-layout"><div><div className="community-composer"><p className="eyebrow">COMPARTE CON LA COMUNIDAD</p><h2>¿En qué estás trabajando?</h2>{user?<form onSubmit={event=>void publishPost(event)}><textarea maxLength={1200} value={postText} onChange={event=>setPostText(event.target.value)} placeholder="Comparte un avance, una pregunta o algo que aprendiste…"/><div><small>{postText.length}/1200</small><button className="action" disabled={postSubmitting||!postText.trim()}>{postSubmitting?'Publicando…':'Publicar'}</button></div>{postError&&<p className="form-error" role="alert">{postError}</p>}</form>:<><p>Inicia sesión para compartir avances, pedir ayuda y conversar sobre código.</p><button className="action" onClick={()=>setPage('login')}>Iniciar sesión para publicar</button></>}</div><div className="community-posts"><p className="eyebrow">CONVERSACIÓN RECIENTE</p>{postsLoading?<div className="feed-skeleton" role="status" aria-label="Cargando conversaciones"><i/><i/><i/></div>:postsError?<div className="feed-error" role="alert"><p>No se pudieron cargar las conversaciones: {postsError}</p><button onClick={()=>void loadPosts()}>Reintentar</button></div>:communityPosts.length?communityPosts.map(post=><article className="community-post" key={post.id}><div className="post-avatar">{post.display_name?.[0]?.toUpperCase()||'A'}</div><div><strong>{post.display_name||post.username}</strong><small>@{post.username} · {new Date(post.created_at).toLocaleString('es-CO')}</small><p>{post.text}</p></div></article>):<div className="explore-empty"><h3>Inicia la conversación</h3><p>Comparte tu primer avance o una pregunta técnica para activar la comunidad.</p></div>}</div></div><div><div className="explore-heading"><div><p className="eyebrow">DIRECTORIO</p><h2>Proyectos para explorar</h2><p>Repositorios públicos de la comunidad.</p></div><label className="sort-select">Orden<select value={feedSort} onChange={event=>setFeedSort(event.target.value as 'popular'|'recent')}><option value="popular">Populares</option><option value="recent">Recientes</option></select></label></div>
       <div className="explore-tags"><span>Prueba una búsqueda:</span>{['api','web','ia','typescript','open source'].map(term=><button key={term} onClick={()=>setFeedSearch(term)}>{term}</button>)}</div>
-      {filteredFeed.length>0?<div className="repo-grid explore-repos">{filteredFeed.map(item=><article className="repo-card explore-repo" key={item.id}><div className="explore-repo-title"><span className="repo-mark">◈</span><div><small>{item.username}</small><b>{item.username}/{item.name}</b></div><span className="repo-public">Público</span></div><p>{item.description||'Repositorio compartido con la comunidad AIVerse.'}</p><div className="repo-meta"><span>☆ {item.stars_count} estrellas</span><span>{item.created_at?new Date(item.created_at).toLocaleDateString('es-CO'):'Proyecto AIVerse'}</span></div></article>)}</div>
+      {feedLoading?<div className="explore-loading" role="status"><span className="loading-spinner" aria-hidden="true"/><p>Cargando proyectos de la comunidad…</p><div className="feed-skeleton"><i/><i/><i/></div></div>:feedError?<div className="feed-error" role="alert"><p>No se pudieron cargar los proyectos: {feedError}</p><button onClick={()=>void loadFeed()}>Reintentar</button></div>:filteredFeed.length>0?<div className="repo-grid explore-repos">{filteredFeed.map(item=><article className="repo-card explore-repo" key={item.id}><div className="explore-repo-title"><span className="repo-mark">◈</span><div><small>{item.username}</small><b>{item.username}/{item.name}</b></div><span className="repo-public">Público</span></div><p>{item.description||'Repositorio compartido con la comunidad AIVerse.'}</p><div className="repo-meta"><span>☆ {item.stars_count} estrellas</span><span>{item.created_at?new Date(item.created_at).toLocaleDateString('es-CO'):'Proyecto AIVerse'}</span></div></article>)}</div>
       :<div className="explore-empty"><span>⌕</span><h3>{feed.length?'No hay resultados para esta búsqueda':'La comunidad está comenzando'}</h3><p>{feed.length?'Prueba con otro nombre o tecnología.':'Cuando los desarrolladores publiquen repositorios, aparecerán aquí para que puedas explorarlos.'}</p>{feedSearch?<button className="secondary action" onClick={()=>setFeedSearch('')}>Borrar búsqueda</button>:<button className="action" onClick={()=>setPage(user?'workspace':'register')}>Crear el primer proyecto</button>}</div>}
     </div></div></section><section className="explore-invite"><div><p className="eyebrow">¿TRABAJAS EN ALGO INTERESANTE?</p><h2>Comparte tu proyecto con la comunidad.</h2><p>Publica tu repositorio y ayuda a otros a descubrirlo, aprender y colaborar.</p></div><button className="action" onClick={()=>setPage(user?'workspace':'register')}>Empieza a construir <span>→</span></button></section>
     <SiteFooter navigate={setPage}/>
   </main>;
 
   if (page === 'login' || page === 'register') return <main className={dark?'auth-page dark':'auth-page'}>
-    <div className="auth-aside"><button className="wordmark" onClick={()=>setPage('home')}><AIVerseMark/><span>AIVerse</span></button><div><p className="eyebrow">EL CÓDIGO SE ENTIENDE EN EQUIPO</p><h2>Tu código avanza. Tu equipo entiende por qué.</h2><p>Versionamiento colaborativo con IA bajo tu control.</p></div><span>Entiende cada cambio · Decide qué integrar</span></div>
+    <div className="auth-aside"><button className="wordmark" onClick={()=>setPage('home')}><AIVerseMark/><span>A<span className="wordmark-i">I</span>Verse</span></button><div><p className="eyebrow">EL CÓDIGO SE ENTIENDE EN EQUIPO</p><h2>Tu código avanza. Tu equipo entiende por qué.</h2><p>Versionamiento colaborativo con IA bajo tu control.</p></div><span>Entiende cada cambio · Decide qué integrar</span></div>
     <section className="auth-card"><button className="auth-back" onClick={()=>setPage('home')}>← Volver al inicio</button><p className="eyebrow">{page==='login'?'QUÉ BUENO VERTE':'EMPIEZA GRATIS'}</p><h1>{page==='login'?'Bienvenido de vuelta':'Crea tu cuenta'}</h1><p className="auth-intro">{page==='login'?'Continúa donde dejaste tu trabajo.':'Tu próximo proyecto empieza con un buen historial.'}</p>
       <form onSubmit={event=>void submitAuth(event)} noValidate={false}>
         {page==='register'&&<><label>Nombre de usuario<input name="username" placeholder="tu-usuario" required minLength={1} maxLength={39} autoComplete="username" pattern="[A-Za-z0-9][A-Za-z0-9-]{0,37}[A-Za-z0-9]?"/><small>Usa letras, números y guiones.</small></label><label>Nombre visible<input name="displayName" placeholder="¿Cómo te llamas?" required maxLength={80} autoComplete="name"/></label></>}
@@ -274,21 +355,22 @@ export default function App() {
       <p className="auth-switch">{page==='login'?'¿Primera vez en AIVerse?':'¿Ya tienes una cuenta?'} <button className="inline-button" onClick={()=>{setFormError('');setPasswordValue('');setPage(page==='login'?'register':'login')}}>{page==='login'?'Crea tu cuenta':'Inicia sesión'}</button></p><p className="auth-legal">Al continuar, aceptas nuestros <button onClick={()=>setPage('terms')}>términos de servicio</button> y <button onClick={()=>setPage('privacy')}>política de privacidad</button>.</p>
     </section></main>;
 
-  if (page === 'home' || page === 'account' || page === 'settings' || page === 'prs' || page === 'docs' || page === 'pricing' || page === 'terms' || page === 'privacy') return <main className={dark?'app marketing-app dark':'app marketing-app'}><SiteHeader page={page} user={user} navigate={setPage}/>
+  if (page === 'home' || page === 'account' || page === 'settings' || page === 'prs' || page === 'docs' || page === 'pricing' || page === 'terms' || page === 'privacy' || page === 'legal' || page === 'cookies') return <main className={dark?'app marketing-app dark':'app marketing-app'}><SiteHeader page={page} user={user} navigate={setPage}/>
     {page==='settings'?<section className="product-page settings-page"><p className="eyebrow">TU ESPACIO</p><h1>Configuración</h1><p>Personaliza AIVerse para que se adapte a ti.</p><div className="settings-card"><label>Idioma de la interfaz<select onChange={event=>localStorage.setItem('aiverse-language',event.target.value)} defaultValue={localStorage.getItem('aiverse-language')??'es'}>{[['es','Español'],['en','English'],['fr','Français'],['de','Deutsch'],['pt','Português'],['ja','日本語']].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Tema<select value={theme} onChange={event=>updateTheme(event.target.value as Theme)}><option value="system">Automático · seguir el sistema</option><option value="light">Claro</option><option value="dark">Oscuro</option></select></label><p className="system-theme-note">Tu sistema está en modo <b>{systemDark?'oscuro':'claro'}</b>. {theme==='system'?'AIVerse seguirá ese ajuste automáticamente.':'El tema elegido se mantiene aunque cambie el sistema.'}</p></div><button className="secondary action" onClick={()=>setPage('account')}>Volver a mi cuenta</button></section>
     :page==='account'?<section className="product-page account-panel"><p className="eyebrow">PERFIL DE DESARROLLADOR</p><div className="account-heading"><span className="avatar">{user?.display_name?.[0]?.toUpperCase()??'A'}</span><div><h1>{user?.display_name??'Tu cuenta'}</h1><p>@{user?.username} · {user?.email}</p></div></div><div className="account-plan"><div><b>Plan Free</b><p>Hasta 3 repositorios · revisión con IA con tu propia clave</p></div><button className="action" onClick={()=>setPage('pricing')}>Ver planes</button></div><button className="secondary action" onClick={()=>setPage('settings')}>Editar preferencias</button></section>
     :page==='docs'?<DocumentationPage navigate={setPage}/>
     :page==='prs'?<section className="product-page"><p className="eyebrow">COLABORACIÓN</p><h1>Pull requests</h1><p>Reúne el contexto, revisa cada cambio y conversa antes de integrarlo.</p><div className="feature-row"><article><b>Revisión con contexto</b><p>Compara ramas y conversa sobre líneas específicas.</p></article><article><b>Decisiones claras</b><p>Aprueba, comenta o solicita cambios con tu equipo.</p></article><article><b>Ayuda de IA</b><p>Usa Gemini para señalar riesgos y oportunidades en el diff.</p></article></div><button className="action" onClick={()=>setPage(user?'workspace':'register')}>Empieza a colaborar</button></section>
-    :page==='terms'||page==='privacy'?<LegalPage kind={page}/>
+    :page==='terms'||page==='privacy'||page==='legal'||page==='cookies'?<><LegalPage kind={page}/><SiteFooter navigate={setPage}/></>
     :page==='pricing'?<PricingPage user={user} billingEnabled={billingEnabled} navigate={setPage} startCheckout={startCheckout}/>
-    :<><Homepage feed={feed} user={user} navigate={setPage}/><SiteFooter navigate={setPage}/></>}</main>;
+    :<>{feedError&&<div className="feed-error home-feed-error" role="alert"><p>No se pudieron cargar los proyectos de la comunidad: {feedError}</p><button onClick={()=>void loadFeed()}>Reintentar</button></div>}<Homepage feed={feed} feedLoading={feedLoading} feedError={feedError} user={user} navigate={setPage}/><SiteFooter navigate={setPage}/></>}</main>;
 
   return <main className={dark ? 'app dark' : 'app'}>
     <header>
       <div className="brand"><span className="logo"><AIVerseMark/></span><div><b>AIVerse</b><small>Tu espacio de desarrollo</small></div></div>
       <div className="header-right"><span className={error ? 'connection offline' : 'connection'}>● {error ? 'Sin conexión' : 'Backend conectado'}</span><span className="branch">⌘ {status.branch}</span>{user&&<button className="workspace-nav" onClick={()=>setPage('settings')}>Configuración</button>}<button className="theme-cycle" onClick={cycleTheme} aria-label={`Tema ${theme==='system'?'automático':theme}; cambiar tema`}>{theme==='system'?'◐':dark?'☀':'☾'}<small>{theme==='system'?'Sistema':dark?'Oscuro':'Claro'}</small></button>{user&&<button className="workspace-account" onClick={()=>setPage('account')}>@{user.username}</button>}</div>
     </header>
-    {error && <div className="error-banner">No se pudo conectar con AIVerse: {error}. Ejecuta <code>npm run dev:server</code>.</div>}
+    {error && <div className="error-banner" role="alert"><span>{health?.sharedRepositoryApiEnabled === false ? error : `No se pudo conectar con AIVerse: ${error}`}</span><button onClick={()=>{setLoading(true);void refresh()}}>Reintentar</button></div>}
+    {loading && <div className="workspace-loading" role="status" aria-live="polite"><span className="loading-spinner" aria-hidden="true"/><span>Conectando con tu espacio de trabajo…</span><div className="loading-track"><i/></div></div>}
     <section className="workspace">
       <aside className="sidebar">
         <div className="workspace-side-nav" aria-label="Navegación del espacio">
@@ -320,7 +402,7 @@ export default function App() {
         </div>
         <div className="graph">
           <div className="panel-head"><span>Historial de commits</span><small>Rama {status.branch}</small></div>
-          {log.length ? <div className="commit-timeline">{log.slice(0, 5).map((item,index)=><motion.article className={index===0?'commit-item latest':'commit-item'} key={item.hash} initial={{opacity:0,y:8}} animate={{opacity:1,y:0}} transition={{delay:index*.05}}><span className="commit-node"/><div><div className="commit-item-title"><b>{item.commit.message}</b>{index===0&&<span>Más reciente</span>}</div><p><code>{item.hash.slice(0,8)}</code><i/>{new Date(item.commit.date).toLocaleString('es-CO')}</p></div></motion.article>)}</div> : <div className="timeline-empty"><span>✦</span><div><b>Tu historia empieza aquí</b><p>Guarda el primer cambio desde la terminal para crear un historial que tu equipo pueda entender.</p></div></div>}
+          {log.length ? <div className="commit-timeline">{log.slice(0, 5).map((item,index)=><article className={index===0?'commit-item latest':'commit-item'} key={item.hash}><span className="commit-node"/><div><div className="commit-item-title"><b>{item.commit.message}</b>{index===0&&<span>Más reciente</span>}</div><p><code>{item.hash.slice(0,8)}</code><i/>{new Date(item.commit.date).toLocaleString('es-CO')}</p></div></article>)}</div> : loading ? <div className="timeline-loading" aria-hidden="true"><i/><i/><i/></div> : <div className="timeline-empty"><span>✦</span><div><b>Tu historia empieza aquí</b><p>Guarda el primer cambio desde la terminal para crear un historial que tu equipo pueda entender.</p></div></div>}
         </div>
         <div className="editor">
           <div className="panel-head"><span>{selected || 'Cambios del árbol de trabajo'}</span><small>{selectedChange ? selectedChange.status : 'contenido confirmado'}</small></div>
@@ -353,21 +435,25 @@ export default function App() {
   </main>;
 }
 
-function Homepage({feed,user,navigate}: {feed: Array<{id:string;name:string;description:string;stars_count:number;username:string}>;user:{username:string}|null;navigate:(page:Page)=>void}) {
+function Homepage({feed,feedLoading,feedError,user,navigate}: {feed: Array<{id:string;name:string;description:string;stars_count:number;username:string}>;feedLoading:boolean;feedError:string;user:{username:string}|null;navigate:(page:RoutePage)=>void}) {
   return <>
     <section className="home-hero"><div className="home-hero-inner">
       <div className="home-hero-copy"><p className="eyebrow">AIVERSE · VERSIONAMIENTO CON CONTEXTO</p><h1>Cada cambio,<br/><span>explicado.</span></h1><p className="home-hero-lead">Revisa el código con tu equipo, entiende las sugerencias de IA y decide qué integrar. El criterio sigue siendo tuyo.</p><div className="home-hero-actions"><button className="action hero-primary" onClick={()=>navigate(user?'workspace':'register')}>Crear mi espacio <span>→</span></button><button className="home-text-link" onClick={()=>navigate('feed')}>Explorar proyectos <span>→</span></button></div><div className="home-proof"><span>✓ Gratis para comenzar</span><i/><span>✓ Sin tarjeta</span><i/><span>✓ IA bajo tu control</span></div></div>
       <div className="home-demo" aria-label="Ejemplo de revisión de código"><div className="home-demo-top"><div><span className="demo-dot"/><b>Revisión de cambio</b></div><span className="demo-status">DECISIÓN PENDIENTE</span></div><div className="home-demo-branch"><span>⑂</span> feature/session-refresh <small>· hace 8 min</small></div><div className="home-diff"><div className="demo-file"><span>src/auth/session.ts</span><span>+2 −1</span></div><div className="diff-line removed"><code>−</code><span>return refresh(token);</span></div><div className="diff-line added"><code>+</code><span>if (isExpired(token)) {'{'} return null; {'}'}</span></div><div className="diff-line added"><code>+</code><span>return refresh(token);</span></div></div><div className="home-ai-note"><span className="note-icon">✦</span><div><b>Explicación de AIVerse</b><p>La comprobación evita renovar una sesión que ya expiró. Revisa cómo se maneja ese caso en las pruebas.</p></div></div><div className="home-demo-decision"><span><i/> Tú decides el siguiente paso</span><button onClick={()=>navigate(user?'workspace':'register')}>Revisar cambios →</button></div></div>
     </div></section>
     <section className="home-process"><div className="home-section-intro"><p className="eyebrow">ASÍ TRABAJAS EN AIVERSE</p><h2>Del diff a una decisión<br/>que puedes explicar.</h2><p>Menos vueltas para entender un cambio. Más contexto para hablar de lo que realmente importa.</p></div><div className="home-process-grid"><article><span>01 / OBSERVA</span><h3>Todo cambio tiene historia.</h3><p>Ramas, commits y diferencias reunidos en una vista. Encuentra qué cambió y sigue el hilo hasta el motivo.</p><b>Historial claro <i>→</i></b></article><article><span>02 / COMPRENDE</span><h3>La IA explica. No decide.</h3><p>Pide una revisión, busca casos límite o pregunta por el código. Cada sugerencia llega con contexto.</p><b>Revisión con contexto <i>→</i></b></article><article><span>03 / COLABORA</span><h3>El equipo conserva el control.</h3><p>Comparte el proyecto, conversa sobre los cambios y elige qué integrar. La decisión siempre es tuya.</p><b>Colaboración transparente <i>→</i></b></article></div></section>
-    {feed.length>=3?<section className="home-community"><div className="home-community-copy"><p className="eyebrow">PROYECTOS DE LA COMUNIDAD</p><h2>Ideas reales.<br/>Código para explorar.</h2><p>Descubre qué están construyendo otros desarrolladores, aprende de sus decisiones y comparte tu propio trabajo.</p><button className="home-text-link" onClick={()=>navigate('feed')}>Explorar la comunidad <span>→</span></button></div><div className="home-project-rail" id="home-project-rail">{feed.slice(0,5).map((item,index)=><article className="home-project-card" key={item.id}><div className="project-card-top"><span>0{index+1}</span><small>PROYECTO COMUNITARIO</small></div><b>{item.username}/{item.name}</b><p>{item.description||'Explora el código y conoce cómo se construyó este proyecto.'}</p><div className="project-card-foot"><span>☆ {item.stars_count}</span><button onClick={()=>navigate('feed')}>Ver proyecto →</button></div></article>)}</div>{feed.length>2&&<div className="rail-controls"><span>Explora más proyectos</span><button aria-label="Proyectos anteriores" onClick={()=>document.getElementById('home-project-rail')?.scrollBy({left:-280,behavior:'smooth'})}>←</button><button aria-label="Más proyectos" onClick={()=>document.getElementById('home-project-rail')?.scrollBy({left:280,behavior:'smooth'})}>→</button></div>}</section>:<section className="home-community-empty"><div><p className="eyebrow">COMUNIDAD AIVERSE</p><h2>Tu proyecto también<br/>merece un lugar.</h2><p>Comparte lo que estás construyendo y ayuda a que más desarrolladores descubran proyectos de la comunidad.</p></div><button className="action" onClick={()=>navigate(user?'workspace':'register')}>Crear mi espacio <span>→</span></button></section>}
+    {feedLoading||feed.length>=3?<section className="home-community"><div className="home-community-copy"><p className="eyebrow">PROYECTOS DE LA COMUNIDAD</p><h2>Ideas reales.<br/>Código para explorar.</h2><p>Descubre qué están construyendo otros desarrolladores, aprende de sus decisiones y comparte tu propio trabajo.</p><button className="home-text-link" onClick={()=>navigate('feed')}>Explorar la comunidad <span>→</span></button></div><div className="home-project-rail" aria-busy={feedLoading} id="home-project-rail">{feedLoading?<div className="home-feed-skeleton" role="status" aria-label="Cargando proyectos"><i/><i/><i/></div>:feed.slice(0,5).map((item,index)=><article className="home-project-card" key={item.id}><div className="project-card-top"><span>0{index+1}</span><small>PROYECTO COMUNITARIO</small></div><b>{item.username}/{item.name}</b><p>{item.description||'Explora el código y conoce cómo se construyó este proyecto.'}</p><div className="project-card-foot"><span>☆ {item.stars_count}</span><button onClick={()=>navigate('feed')}>Ver proyecto →</button></div></article>)}</div>{feed.length>2&&<div className="rail-controls"><span>Explora más proyectos</span><button aria-label="Proyectos anteriores" onClick={()=>document.getElementById('home-project-rail')?.scrollBy({left:-280,behavior:'smooth'})}>←</button><button aria-label="Más proyectos" onClick={()=>document.getElementById('home-project-rail')?.scrollBy({left:280,behavior:'smooth'})}>→</button></div>}</section>:feedError?null:<section className="home-community-empty"><div><p className="eyebrow">COMUNIDAD AIVERSE</p><h2>Tu proyecto también<br/>merece un lugar.</h2><p>Comparte lo que estás construyendo y ayuda a que más desarrolladores descubran proyectos de la comunidad.</p></div><button className="action" onClick={()=>navigate(user?'workspace':'register')}>Crear mi espacio <span>→</span></button></section>}
     <section className="home-learning"><div><p className="eyebrow">APRENDE MIENTRAS CONSTRUYES</p><h2>Una guía clara para cada paso.</h2><p>Desde tu primer commit hasta una revisión colaborativa: consulta ejemplos, comandos y respuestas cuando los necesites.</p></div><button onClick={()=>navigate('docs')}>Ir a la documentación <span>→</span></button></section>
     <section className="home-plans"><div><p className="eyebrow">EMPIEZA A TU RITMO</p><h2>Prueba el flujo.<br/><span>Crece cuando te sirva.</span></h2><p>Explora gratis y pasa a un plan con más espacio cuando tus proyectos lo pidan.</p></div><div className="home-plan-preview"><span>PARA PROBAR AIVERSE</span><strong>Starter <small>· mensual</small></strong><b>COP 3.300</b><p>Más repositorios, privacidad y revisiones con IA.</p><button onClick={()=>navigate('pricing')}>Comparar planes →</button></div></section>
     <section className="home-final-cta"><p className="eyebrow">TU PRÓXIMO CAMBIO PUEDE EMPEZAR AQUÍ</p><h2>Construye con claridad.<br/><span>Decide en equipo.</span></h2><button className="action" onClick={()=>navigate(user?'workspace':'register')}>Crear mi espacio <span>→</span></button><small>Gratis para comenzar · Tus decisiones siguen siendo tuyas</small></section>
   </>;
 }
 
-function PricingPage({user,billingEnabled,navigate,startCheckout}: {user:{username:string}|null;billingEnabled:boolean;navigate:(page:Page)=>void;startCheckout:(plan:'starter'|'plus'|'pro')=>Promise<void>}) {
+function DiffColumn({title, text}: {title: string; text: string}) {
+  return <section className="diff-column"><div>{title}</div><pre>{text || '∅'}</pre></section>;
+}
+
+function PricingPage({user,billingEnabled,navigate,startCheckout}: {user:{username:string}|null;billingEnabled:boolean;navigate:(page:RoutePage)=>void;startCheckout:(plan:'starter'|'plus'|'pro')=>Promise<void>}) {
   const choosePlan = (plan:'starter'|'plus'|'pro') => user ? void startCheckout(plan) : navigate('login');
   return <>
     <section className="pricing-hero"><p className="eyebrow">PRECIOS CLAROS, EN PESOS COLOMBIANOS</p><h1>Elige cómo quieres<br/><span>hacer crecer tus proyectos.</span></h1><p>Compara el espacio que necesitas. Empieza gratis y cambia de plan cuando te convenga.</p><div className="billing-note">{billingEnabled?'Pagos mensuales procesados de forma segura con Mercado Pago.':'El plan Free está disponible. Los pagos de planes superiores estarán disponibles próximamente.'}</div></section>
@@ -381,10 +467,6 @@ function PricingPage({user,billingEnabled,navigate,startCheckout}: {user:{userna
   </>;
 }
 
-function DiffColumn({title, text}: {title: string; text: string}) {
-  return <section className="diff-column"><div>{title}</div><pre>{text || '∅'}</pre></section>;
-}
-
 function PlanCard({name, price, cadence, description, features, action, highlighted = false, disabled = false, onClick}: {
   name: string; price: string; cadence: string; description: string; features: string[]; action: string; highlighted?: boolean; disabled?: boolean; onClick: () => void;
 }) {
@@ -395,15 +477,15 @@ function AIVerseMark() {
   return <svg className="aiverse-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M7 32 20 19 33 32M20 19V7"/><circle cx="7" cy="32" r="2.5"/><circle cx="33" cy="32" r="2.5"/><circle className="mark-core" cx="20" cy="19" r="3"/><circle cx="20" cy="7" r="2.5"/></svg>;
 }
 
-function SiteHeader({page, user, navigate}: {page: Page; user: {username:string}|null; navigate: (page: Page)=>void}) {
+function SiteHeader({page, user, navigate}: {page: Page; user: {username:string}|null; navigate: (page: RoutePage)=>void}) {
   return <header className="site-header"><button className="wordmark" onClick={()=>navigate('home')}><AIVerseMark/><span>A<span className="wordmark-i">I</span>Verse</span></button><nav aria-label="Navegación principal"><button className={page==='home'?'active':''} onClick={()=>navigate('home')}>Inicio</button><button className={page==='feed'?'active':''} onClick={()=>navigate('feed')}>Comunidad</button><button className={page==='docs'?'active':''} onClick={()=>navigate('docs')}>Guías</button><button className={page==='pricing'?'active':''} onClick={()=>navigate('pricing')}>Planes</button></nav><div className="site-header-actions">{user?<button className="account-link" onClick={()=>navigate('account')}>@{user.username}</button>:<button className="site-login" onClick={()=>navigate('login')}>Iniciar sesión</button>}<button className="action site-cta" onClick={()=>navigate(user?'workspace':'register')}>{user?'Abrir espacio':'Crear mi espacio'} <span>→</span></button></div></header>;
 }
 
-function SiteFooter({navigate}: {navigate: (page: Page)=>void}) {
-  return <footer className="site-footer"><div className="footer-main"><div className="footer-brand"><button className="wordmark" onClick={()=>navigate('home')}><AIVerseMark/><span>A<span className="wordmark-i">I</span>Verse</span></button><p>Versionamiento colaborativo con IA bajo tu control.</p></div><div className="footer-links"><div><b>Comunidad</b><button onClick={()=>navigate('feed')}>Feed</button><button onClick={()=>navigate('docs')}>Documentación</button></div><div><b>Cuenta</b><button onClick={()=>navigate('login')}>Iniciar sesión</button><button onClick={()=>navigate('register')}>Crear mi espacio</button><button onClick={()=>navigate('pricing')}>Planes</button></div><div><b>Información</b><button onClick={()=>navigate('terms')}>Términos de servicio</button><button onClick={()=>navigate('privacy')}>Política de privacidad</button></div></div></div><div className="footer-bottom"><span>© 2026 AIVerse · Beta</span><span>Entiende cada cambio. Construye con confianza.</span></div></footer>;
+function SiteFooter({navigate}: {navigate: (page: RoutePage)=>void}) {
+  return <footer className="site-footer"><div className="footer-main"><div className="footer-brand"><button className="wordmark" onClick={()=>navigate('home')}><AIVerseMark/><span>A<span className="wordmark-i">I</span>Verse</span></button><p>Versionamiento colaborativo con IA bajo tu control.</p></div><div className="footer-links"><div><b>Comunidad</b><button onClick={()=>navigate('feed')}>Feed</button><button onClick={()=>navigate('docs')}>Documentación</button></div><div><b>Cuenta</b><button onClick={()=>navigate('login')}>Iniciar sesión</button><button onClick={()=>navigate('register')}>Crear mi espacio</button><button onClick={()=>navigate('pricing')}>Planes</button></div><div><b>Información</b><button onClick={()=>navigate('legal')}>Aviso legal</button><button onClick={()=>navigate('terms')}>Términos de servicio</button><button onClick={()=>navigate('privacy')}>Política de privacidad</button><button onClick={()=>navigate('cookies')}>Aviso de cookies</button></div></div></div><div className="footer-bottom"><span>© 2026 AIVerse · Beta</span><span>Entiende cada cambio. Construye con confianza.</span></div></footer>;
 }
 
-function DocumentationPage({navigate}: {navigate: (page: Page)=>void}) {
+function DocumentationPage({navigate}: {navigate: (page: RoutePage)=>void}) {
   return <article className="docs-page"><aside className="docs-index"><p className="eyebrow">CENTRO DE APRENDIZAJE</p><a href="#quickstart">Primeros pasos</a><a href="#repositories">Repositorios</a><a href="#terminal-guide">Terminal</a><a href="#ai-guide">Asistente IA</a><a href="#reviews">Revisión colaborativa</a><a href="#privacy-guide">Privacidad y seguridad</a><a href="#troubleshooting">Solución de problemas</a></aside><div className="docs-content"><p className="eyebrow">DOCUMENTACIÓN AIVERSE</p><h1>Aprende construyendo.</h1><p className="docs-lead">Guías prácticas para llevar una idea desde el primer repositorio hasta una revisión lista para integrar. Puedes usar la interfaz web, la terminal o combinar ambas.</p><div className="docs-callout"><b>Empieza aquí</b><p>Crea tu cuenta, abre tu espacio de trabajo y crea un repositorio. En pocos minutos podrás guardar cambios y pedirle a la IA que te explique el diff.</p><button className="action" onClick={()=>navigate('workspace')}>Abrir mi espacio →</button></div>
     <section id="quickstart"><h2>1. Primeros pasos</h2><p>AIVerse organiza tu trabajo como repositorios. Cada repositorio contiene archivos, ramas y un historial de commits. El panel lateral muestra el estado actual y el historial conserva los cambios confirmados.</p><ol><li>Crea una cuenta y elige un nombre de usuario.</li><li>Abre el espacio de trabajo y crea un repositorio con un nombre breve.</li><li>Añade o edita archivos en tu entorno local y revisa el estado.</li><li>Prepara los cambios, escribe un mensaje claro y crea un commit.</li><li>Usa el asistente para explicar el cambio, detectar riesgos o proponer un mensaje.</li></ol><pre><code>aiverse status<br/>aiverse add .<br/>aiverse commit -m "Agrega página de inicio"</code></pre></section>
     <section id="repositories"><h2>2. Repositorios y visibilidad</h2><p>Un repositorio es el espacio de trabajo de un proyecto. Usa nombres descriptivos, una descripción que indique qué hace y una visibilidad acorde con el contenido.</p><ul><li><b>Público:</b> puede aparecer en Explorar y otras personas pueden descubrirlo.</li><li><b>Privado:</b> destinado a trabajo que no quieres mostrar públicamente; revisa siempre quién tiene acceso.</li><li><b>Descripción:</b> resume el propósito, el estado y la forma de ejecutar el proyecto.</li><li><b>Commits:</b> agrupa cambios relacionados y explica la intención, no solo el archivo modificado.</li></ul><p>Antes de publicar, busca claves de API, contraseñas, archivos `.env`, tokens y datos personales. Si un secreto ya llegó a un commit, revócalo; borrarlo de la última versión no elimina copias anteriores del historial.</p></section>
@@ -414,24 +496,26 @@ function DocumentationPage({navigate}: {navigate: (page: Page)=>void}) {
     <section id="troubleshooting"><h2>7. Solución de problemas</h2><h3>No conecta con el backend</h3><p>Comprueba que el servicio esté activo, que la URL HTTPS de la API esté configurada en `VITE_API_URL` y que el dominio web esté permitido por `WEB_ORIGIN`.</p><h3>La sesión no se mantiene</h3><p>Verifica HTTPS, cookies seguras, CORS con credenciales y que el origen configurado coincida exactamente con el dominio de la web.</p><h3>La IA no responde</h3><p>El operador debe configurar una clave del proveedor y habilitar solicitudes de red. Si no está configurada, las funciones que dependen del modelo externo no estarán disponibles.</p><h3>No puedo publicar</h3><p>Inicia sesión, comprueba tu conexión y confirma que el contenido esté dentro del límite de caracteres. La publicación requiere que la base de datos esté conectada.</p><p className="docs-updated">Esta guía describe las funciones disponibles en la beta actual y se actualizará junto con el producto.</p></section></div></article>;
 }
 
-function LegalPage({kind}: {kind: 'terms'|'privacy'}) {
+function LegalPage({kind}: {kind: 'terms'|'privacy'|'legal'|'cookies'}) {
+  if (kind === 'legal') return <article className="legal-page"><p className="eyebrow">AIVERSE · INFORMACIÓN LEGAL</p><h1>Aviso legal</h1><p className="legal-updated">Información del servicio · Beta</p><p>AIVerse es una plataforma web de versionamiento de código, colaboración y asistencia de inteligencia artificial. Este sitio describe una beta y puede cambiar mientras se desarrolla.</p><h2>Operador del servicio</h2><div className="legal-beta-note"><b>Información pendiente:</b> el repositorio no identifica al titular legal de AIVerse ni publica una dirección o canal de contacto. El operador debe completar esos datos antes de ofrecer el servicio al público.</div><ul><li>Titular o razón social: no indicado.</li><li>País y domicilio de contacto: no indicados.</li><li>Correo de soporte y privacidad: no indicado.</li></ul><h2>Propiedad intelectual y contenido</h2><p>Los nombres, marcas e interfaz de AIVerse identifican este servicio. Quien usa la plataforma conserva los derechos sobre el código que aporta y debe contar con autorización para compartirlo. Consulta los <a href="/terms">términos de servicio</a> y la <a href="/privacy">política de privacidad</a>.</p><h2>Disponibilidad y enlaces</h2><p>La plataforma está en beta y se ofrece tal como está disponible. Puede contener fallos, interrumpirse o cambiar. Los enlaces y servicios de terceros se rigen por las condiciones de sus respectivos proveedores.</p><p className="docs-updated">Este aviso es un borrador informativo, no sustituye la identificación legal del operador ni la revisión jurídica aplicable.</p></article>;
+  if (kind === 'cookies') return <article className="legal-page"><p className="eyebrow">AIVERSE · INFORMACIÓN LEGAL</p><h1>Aviso de cookies</h1><p className="legal-updated">Última actualización: 14 de noviembre de 2026 · Servicio en beta</p><p>AIVerse utiliza almacenamiento técnico necesario para mantener la sesión y proteger las acciones de la cuenta. En esta aplicación no se han configurado cookies publicitarias ni herramientas de analítica.</p><h2>Cookies necesarias</h2><ul><li><b>aiverse_session:</b> mantiene la sesión iniciada. Es una cookie HttpOnly para impedir que JavaScript lea el identificador de sesión; en producción se marca Secure.</li><li><b>aiverse_csrf:</b> permite validar que las acciones enviadas desde la interfaz sean legítimas. No contiene la sesión; en producción se transmite bajo HTTPS.</li></ul><h2>Preferencias del navegador</h2><p>El tema y el idioma se guardan en el almacenamiento local del navegador, no en cookies. Puedes borrarlos desde la configuración de privacidad del navegador; al hacerlo, AIVerse volverá a los valores predeterminados.</p><h2>Control</h2><p>Si bloqueas las cookies necesarias, puede que no puedas iniciar sesión o realizar acciones protegidas. La interfaz no carga cookies opcionales de publicidad o medición en esta versión.</p><div className="legal-beta-note"><b>Nota de beta:</b> este aviso refleja el código de la aplicación revisado. El operador debe actualizarlo si incorpora analítica, publicidad, vídeos incrustados u otros servicios que almacenen información en el navegador.</div></article>;
   const privacy = kind === 'privacy';
-  return <article className="legal-page"><p className="eyebrow">AIVERSE · INFORMACIÓN LEGAL</p><h1>{privacy?'Política de privacidad':'Términos de servicio'}</h1><p className="legal-updated">Última actualización: 7 de noviembre de 2026 · Servicio en beta</p>{privacy?<>
-    <p>Esta política explica qué datos procesa AIVerse y cómo se usan. AIVerse está en beta; antes de abrir el servicio al público, el operador debe publicar su nombre legal, país y un correo de contacto para solicitudes de privacidad.</p>
+  return <article className="legal-page"><p className="eyebrow">AIVERSE · INFORMACIÓN LEGAL</p><h1>{privacy?'Política de privacidad':'Términos de servicio'}</h1><p className="legal-updated">Última actualización: 14 de noviembre de 2026 · Servicio en beta</p>{privacy?<>
+    <p>Esta política explica qué datos procesa AIVerse y cómo se usan. El operador legal y el canal para ejercer solicitudes de privacidad todavía deben publicarse; consulta el <a href="/aviso-legal">aviso legal</a>.</p>
     <h2>Datos que procesamos</h2><ul><li>Datos de cuenta: nombre de usuario, nombre visible, correo electrónico y contraseña almacenada como hash seguro.</li><li>Datos de uso: sesiones, preferencias guardadas en el navegador, metadatos de repositorios, actividad y pull requests.</li><li>Código: el contenido versionado se guarda en almacenamiento persistente del backend; los metadatos se guardan en MongoDB.</li><li>Datos técnicos básicos, como dirección IP, registros de error y uso de seguridad, pueden procesarse en la infraestructura de Render, Vercel y MongoDB Atlas.</li></ul>
-    <h2>Revisiones con IA</h2><p>Si solicitas una revisión con IA, el diff o texto que envíes se transmite desde el backend a Google Gemini usando la clave configurada por el operador de AIVerse. No envíes contraseñas, tokens, claves privadas ni datos personales en el código. El tratamiento por Google está sujeto a sus propias condiciones y políticas.</p>
-    <h2>Cookies y preferencias</h2><p>Usamos cookies necesarias para mantener la sesión y proteger las acciones contra solicitudes no autorizadas. El tema y el idioma seleccionados se guardan localmente en tu navegador.</p>
+    <h2>Revisiones con IA</h2><p>Si solicitas una revisión con IA, el diff o texto que envíes se transmite desde el backend al proveedor configurado por el operador (Google Gemini en la configuración actual). No envíes contraseñas, tokens, claves privadas ni datos personales en el código. El tratamiento por el proveedor está sujeto a sus propias condiciones y políticas.</p>
+    <h2>Cookies y preferencias</h2><p>Usamos cookies necesarias para mantener la sesión y proteger las acciones contra solicitudes no autorizadas. El tema y el idioma seleccionados se guardan localmente en tu navegador. No se han configurado cookies publicitarias ni herramientas de analítica; consulta el <a href="/cookies">aviso de cookies</a>.</p>
     <h2>Visibilidad y conservación</h2><p>Los repositorios públicos pueden mostrarse en Explorar. Mantén privado cualquier contenido que no quieras compartir. Conservamos los datos mientras la cuenta o el repositorio sigan activos; el borrado de cuenta aún no está disponible desde la interfaz durante esta beta.</p>
-    <h2>Tus solicitudes</h2><p>Para consultar, corregir o solicitar la eliminación de información, contacta al operador del servicio mediante el canal de soporte que se publicará antes del lanzamiento. No compartas datos privados en issues públicos.</p>
+    <h2>Tus solicitudes</h2><p>Puedes solicitar consulta, corrección o eliminación de información. El canal de contacto aún no está configurado en esta entrega y debe publicarse antes de ofrecer el servicio al público. No compartas datos privados en issues públicos.</p>
     <h2>Servicios de terceros</h2><p>La aplicación puede depender de Render para el backend y almacenamiento persistente, Vercel para servir la interfaz, MongoDB Atlas para la base de datos y Google Gemini para la IA cuando está habilitada. Cada proveedor puede procesar datos técnicos necesarios para prestar su servicio.</p>
   </>:<>
     <p>Estos términos cubren el uso de AIVerse, una plataforma de versionamiento y colaboración que actualmente se ofrece en beta. Al crear una cuenta o usar el servicio, aceptas seguir estas reglas.</p>
     <h2>Tu cuenta</h2><p>Proporciona un correo válido, protege tus credenciales y avísanos si sospechas que alguien accedió a tu cuenta. Eres responsable de la actividad realizada desde tu sesión.</p>
     <h2>Tu código y tus repositorios</h2><p>Conservas los derechos sobre el código que subes. Nos autorizas a almacenarlo, procesarlo y mostrarlo para operar AIVerse según la visibilidad que elijas. Los repositorios públicos pueden aparecer en Explorar; no subas información que no tengas derecho a compartir.</p>
     <h2>Uso aceptable</h2><p>No uses AIVerse para distribuir malware, vulnerar sistemas, abusar de otros usuarios, infringir derechos de terceros o interrumpir el servicio. Podemos limitar o suspender cuentas que representen un riesgo para la plataforma o la comunidad.</p>
-    <h2>Planes y facturación</h2><p>Free, Plus y Pro aparecen en la página de precios. Durante la beta solo está habilitado Free; los planes pagados y sus precios de referencia no generan cobros ni activan funciones hasta que se publique la facturación.</p>
+    <h2>Planes y facturación</h2><p>Los planes y precios vigentes se muestran en <a href="/pricing">Planes</a>. Si el operador habilita el checkout, las suscripciones se procesan mensualmente en COP mediante Mercado Pago. Antes de suscribirte, revisa el precio mostrado y las condiciones que presente el proveedor de pago.</p>
     <h2>Beta y disponibilidad</h2><p>La plataforma cambia con frecuencia y algunas funciones pueden fallar, cambiar o dejar de estar disponibles. No prometemos disponibilidad continua ni que el servicio esté libre de errores. Mantén copias independientes de tu trabajo importante.</p>
-    <h2>Terminación</h2><p>Puedes dejar de usar el servicio en cualquier momento. Durante la beta, solicita al operador el cierre de cuenta y eliminación de datos usando el canal de soporte que se publicará antes del lanzamiento.</p>
-    <h2>Cambios y contacto</h2><p>Podemos actualizar estos términos a medida que el producto evolucione. La fecha de actualización aparecerá al comienzo de esta página. El operador debe publicar datos de contacto antes de abrir AIVerse al público.</p>
+    <h2>Terminación</h2><p>Puedes dejar de usar el servicio en cualquier momento. La interfaz aún no permite eliminar la cuenta ni cancelar una suscripción. El operador debe publicar un canal de soporte para estas solicitudes.</p>
+    <h2>Cambios y contacto</h2><p>Estos términos pueden actualizarse a medida que el producto evolucione. La fecha de actualización aparecerá al comienzo de esta página. Los datos del operador y el canal de contacto siguen pendientes de publicación.</p>
   </>}<div className="legal-beta-note"><b>Nota de beta:</b> estos textos describen las funciones actuales y requieren revisión legal y los datos de contacto del operador antes de un lanzamiento público.</div></article>;
 }

@@ -14,20 +14,28 @@ import {AITaskQueue, GeminiProvider, OpenAIProvider} from './ai.js';
 import {resolveRepository} from './repository-root.js';
 import {Repository} from '@aiverse/core';
 import {activities, database, initializeDatabase, pullRequests, repositories, reviews, users} from './database.js';
-import {createAccount, createSession, currentUser, destroySession, login, requireCsrf} from './auth.js';
+import {AuthError, createAccount, createSession, currentUser, destroySession, hasValidSessionToken, login, requireCsrf} from './auth.js';
 
 const autoInit = process.argv.includes('--auto-init') || process.env.MINIGIT_AUTO_INIT === 'true';
 const {repo, initialized} = await resolveRepository({cwd: process.cwd(), initCwd: process.env.INIT_CWD, explicitRoot: process.env.MINIGIT_REPO, autoInit});
 const port = Number(process.env.PORT ?? 4179);
 const host = process.env.HOST ?? (process.env.NODE_ENV === 'production' ? '0.0.0.0' : '127.0.0.1');
+const sharedRepositoryApiEnabled = process.env.NODE_ENV !== 'production' || process.env.ENABLE_SHARED_REPOSITORY_API === 'true';
 const app = express();
 const server = createServer(app);
 function isAllowedWebOrigin(origin: string): boolean {
   const configuredOrigins = (process.env.WEB_ORIGIN ?? '').split(',').map(value => value.trim()).filter(Boolean);
-  return new Set(['http://localhost:5173', 'http://127.0.0.1:5173', ...configuredOrigins]).has(origin);
+  const developmentOrigins = process.env.NODE_ENV === 'production' ? [] : ['http://localhost:5173', 'http://127.0.0.1:5173'];
+  return new Set([...developmentOrigins, ...configuredOrigins]).has(origin);
 }
-const wss = new WebSocketServer({server, path: '/api/events', verifyClient: ({origin}, callback) => {
-  callback(!origin || isAllowedWebOrigin(origin), origin && !isAllowedWebOrigin(origin) ? 403 : 0, 'Origin not allowed');
+const wss = new WebSocketServer({server, path: '/api/events', verifyClient: ({origin, req}, callback) => {
+  void (async () => {
+    const allowedOrigin = Boolean(origin && isAllowedWebOrigin(origin));
+    const cookieHeader = req.headers.cookie ?? '';
+    const sessionToken = cookieHeader.split(';').map(value => value.trim()).find(value => value.startsWith('aiverse_session='))?.slice('aiverse_session='.length) ?? '';
+    const authorized = process.env.NODE_ENV !== 'production' || (sharedRepositoryApiEnabled && allowedOrigin && await hasValidSessionToken(decodeURIComponent(sessionToken)));
+    callback(authorized && (process.env.NODE_ENV !== 'production' || allowedOrigin), authorized ? 0 : 403, 'Origin or session not allowed');
+  })().catch(() => callback(false, 403, 'Origin or session not allowed'));
 }});
 
 function broadcast(event: unknown): void {
@@ -43,7 +51,7 @@ const provider = externalAIEnabled && aiProvider === 'gemini' && process.env.GEM
     ? new OpenAIProvider(process.env.OPENAI_API_KEY, process.env.OPENAI_MODEL ?? 'gpt-4o-mini')
     : {async run() { throw new Error('Configura GEMINI_API_KEY y AI_ALLOW_NETWORK=true para habilitar la revisión con IA.'); }};
 const aiTasks = new AITaskQueue(provider, Number(process.env.AI_CONCURRENCY ?? 2), Number(process.env.AI_MAX_RETRIES ?? 2),
-  (task: AITask) => broadcast({type: 'ai-task', task}));
+  (task: AITask) => { if (process.env.NODE_ENV !== 'production') broadcast({type: 'ai-task', task}); });
 
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
@@ -89,7 +97,12 @@ app.use((request, response, next) => {
 });
 app.options('*', (_request, response) => response.sendStatus(204));
 
-app.get('/api/health', (_request, response) => response.json({ok: true, root: repo.root, provider: externalAIEnabled ? aiProvider : 'unconfigured'}));
+app.use(['/api/repo', '/api/remote'], (_request, response, next) => {
+  if (sharedRepositoryApiEnabled) { next(); return; }
+  response.status(503).json({error: 'El repositorio compartido está deshabilitado en producción. Habilítalo solo en una instalación de confianza y de un solo operador.'});
+});
+
+app.get('/api/health', (_request, response) => response.json({ok: true, ...(process.env.NODE_ENV === 'production' ? {} : {root: repo.root}), provider: externalAIEnabled ? aiProvider : 'unconfigured', sharedRepositoryApiEnabled}));
 app.get('/api/auth/csrf', (_request, response) => {
   const token = randomUUID() + randomUUID();
   const secure = process.env.NODE_ENV === 'production';
@@ -118,6 +131,7 @@ app.get('/api/repo/file', async (request, response, next) => {
 app.get('/api/structures', (_request, response) => response.json(repo.getStructureSnapshot()));
 
 const authLimiter = rateLimit({windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false});
+const aiLimiter = rateLimit({windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false});
 app.post('/api/auth/register', authLimiter, async (request, response, next) => {
   try {
     if (!requireCsrf(request, response)) return;
@@ -287,16 +301,39 @@ app.post('/api/repo/stash', async (request, response, next) => { try { response.
 app.post('/api/repo/reset', async (request, response, next) => { try { response.json({hash: await repo.reset(request.body.target ?? 'HEAD', request.body.hard ?? false)}); } catch (error) { next(error); } });
 app.post('/api/repo/revert', async (request, response, next) => { try { response.json({hash: await repo.revert(request.body.target)}); } catch (error) { next(error); } });
 
-app.get('/api/ai/tasks', (_request, response) => response.json(aiTasks.list()));
-app.get('/api/ai/tasks/:id', (request, response) => {
+const aiTaskOwners = new Map<string, string>();
+app.get('/api/ai/tasks', async (request, response, next) => {
+  try {
+    const user = process.env.NODE_ENV === 'production' ? await currentUser(request) : null;
+    if (process.env.NODE_ENV === 'production' && !user) { response.status(401).json({error: 'Inicia sesión para consultar tareas de IA.'}); return; }
+    response.json(process.env.NODE_ENV === 'production' ? aiTasks.list().filter(task => aiTaskOwners.get(task.id) === user?.id) : aiTasks.list());
+  } catch (error) { next(error); }
+});
+app.get('/api/ai/tasks/:id', async (request, response, next) => {
+  try {
+  const user = process.env.NODE_ENV === 'production' ? await currentUser(request) : null;
+  if (process.env.NODE_ENV === 'production' && !user) { response.status(401).json({error: 'Inicia sesión para consultar tareas de IA.'}); return; }
+  if (process.env.NODE_ENV === 'production' && aiTaskOwners.get(request.params.id) !== user?.id) { response.status(404).json({error: 'Tarea no encontrada.'}); return; }
   const task = aiTasks.get(request.params.id);
   if (!task) { response.status(404).json({error: 'Task not found'}); return; }
   response.json(task);
+  } catch (error) { next(error); }
 });
-app.post('/api/ai/:kind', (request, response) => {
+app.post('/api/ai/:kind', aiLimiter, async (request, response, next) => {
+  try {
+  let aiOwnerId = '';
+  if (process.env.NODE_ENV === 'production') {
+    if (!requireCsrf(request, response)) return;
+    const user = await currentUser(request);
+    if (!user) { response.status(401).json({error: 'Inicia sesión para usar las funciones de IA.'}); return; }
+    aiOwnerId = String(user.id);
+  }
   const kind = request.params.kind as AITaskKind;
   if (!['review', 'commit-msg', 'resolve', 'ask'].includes(kind)) { response.status(404).json({error: 'Unknown AI task'}); return; }
-  response.status(202).json(aiTasks.enqueue(kind, request.body.diff ?? request.body.text ?? ''));
+  const task = aiTasks.enqueue(kind, request.body.diff ?? request.body.text ?? '');
+  if (aiOwnerId) aiTaskOwners.set(task.id, aiOwnerId);
+  response.status(202).json(task);
+  } catch (error) { next(error); }
 });
 
 app.get('/api/remote/refs', async (_request, response, next) => { try { response.json({refs: (await repo.remoteSnapshot()).refs}); } catch (error) { next(error); } });
@@ -311,7 +348,11 @@ app.post('/api/remote/push', async (request, response, next) => {
 });
 
 app.use((error: unknown, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-  response.status(400).json({error: error instanceof Error ? error.message : String(error)});
+  const statusCode = error instanceof AuthError ? error.statusCode : Number((error as {status?: number; statusCode?: number} | null)?.statusCode ?? (error as {status?: number} | null)?.status ?? 500);
+  const safeStatus = Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599 ? statusCode : 500;
+  if (safeStatus >= 500 && safeStatus !== 503) console.error('Unhandled API error', error);
+  const message = error instanceof Error ? error.message : String(error);
+  response.status(safeStatus).json({error: safeStatus >= 500 && safeStatus !== 503 ? 'Ocurrió un error interno. Intenta de nuevo.' : message});
 });
 
 try {

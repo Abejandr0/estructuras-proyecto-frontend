@@ -1,0 +1,8 @@
+User-agent: *
+Disallow: /api/
+Disallow: /workspace
+Disallow: /account
+Disallow: /settings
+Disallow: /login
+Disallow: /signup
+Sitemap: https://aiverse.vercel.app/sitemap.xml

@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "build": "npm run build -w @aiverse/core && npm run build -w @aiverse/cli && npm run build -w @aiverse/server && npm run build -w @aiverse/web",
-    "test": "vitest run",
+    "test": "vitest run --exclude '**/aiverse/**'",
     "bench": "tsx benchmarks/run.ts",
     "dev:server": "npm run dev -w @aiverse/server",
     "dev:web": "npm run dev -w @aiverse/web"
@@ -21,7 +21,7 @@
     "@types/react-dom": "^18.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^5.1.0"
   },
   "dependencies": {
     "cookie-parser": "^1.4.7",

@@ -8,6 +8,7 @@ services:
       PORT: 4179
       MONGODB_URI: ${MONGODB_URI:?Set MONGODB_URI in .env}
       MINIGIT_REPO: /srv/aiverse
+      ENABLE_SHARED_REPOSITORY_API: ${ENABLE_SHARED_REPOSITORY_API:-false}
       AI_PROVIDER: gemini
       AI_ALLOW_NETWORK: ${AI_ALLOW_NETWORK:-false}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}

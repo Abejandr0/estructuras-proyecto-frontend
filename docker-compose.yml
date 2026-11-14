@@ -24,6 +24,7 @@ services:
       NODE_ENV: production
       HOST: 0.0.0.0
       PORT: 4179
+      ENABLE_SHARED_REPOSITORY_API: "true"
       MONGODB_URI: mongodb://aiverse:${MONGO_PASSWORD}@db:27017/aiverse?authSource=admin
       MINIGIT_REPO: /srv/aiverse
       AI_PROVIDER: gemini
