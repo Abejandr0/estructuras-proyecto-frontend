@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useMemo, useState} from 'react';
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react';
 import type {FormEvent} from 'react';
 
 type Commit = {hash: string; commit: {message: string; date: string; parents: string[]}};
@@ -17,6 +17,19 @@ type Page = 'home'|'feed'|'docs'|'workspace'|'login'|'register'|'account'|'setti
 type Theme = 'system'|'light'|'dark';
 type RoutePage = Exclude<Page, 'notFound'>;
 const pageRoutes: Record<RoutePage, string> = {home: '/', feed: '/explore', docs: '/docs', workspace: '/workspace', login: '/login', register: '/signup', account: '/account', settings: '/settings', prs: '/pull-requests', pricing: '/pricing', terms: '/terms', privacy: '/privacy', legal: '/aviso-legal', cookies: '/cookies'};
+function readThemePreference(): Theme {
+  try {
+    const stored = localStorage.getItem('theme') ?? localStorage.getItem('aiverse-theme');
+    if (stored === 'light' || stored === 'dark' || stored === 'system') return stored;
+  } catch {}
+  return 'system';
+}
+
+function systemPrefersDark(): boolean {
+  try { return window.matchMedia('(prefers-color-scheme: dark)').matches; }
+  catch { return false; }
+}
+
 function pageFromLocation(): Page {
   const legacyRoute = window.location.pathname === '/' && window.location.hash.startsWith('#/')
     ? window.location.hash.slice(1).split('?')[0]
@@ -84,11 +97,8 @@ export default function App() {
   const [aiTask, setAiTask] = useState<AITask | null>(null);
   const [aiQuestion, setAiQuestion] = useState('');
   const [showMobileAI, setShowMobileAI] = useState(false);
-  const [theme, setTheme] = useState<Theme>(() => {
-    const stored = localStorage.getItem('aiverse-theme');
-    return stored === 'dark' || stored === 'light' ? stored : 'system';
-  });
-  const [systemDark, setSystemDark] = useState(() => window.matchMedia('(prefers-color-scheme: dark)').matches);
+  const [theme, setTheme] = useState<Theme>(readThemePreference);
+  const [systemDark, setSystemDark] = useState(systemPrefersDark);
   const [feedSearch, setFeedSearch] = useState('');
   const [feedSort, setFeedSort] = useState<'popular'|'recent'>('popular');
   const [communityPosts, setCommunityPosts] = useState<Array<{id:string;text:string;created_at:string;username:string;display_name:string}>>([]);
@@ -120,11 +130,26 @@ export default function App() {
     return () => media.removeEventListener('change', update);
   }, []);
 
+  useEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = dark ? 'dark' : 'light';
+    root.dataset.themePreference = theme;
+    root.style.colorScheme = dark ? 'dark' : 'light';
+    const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+    if (themeColor) themeColor.content = dark ? '#1c1d29' : '#fbfaf7';
+  }, [dark, theme]);
+
   const updateTheme = (nextTheme: Theme) => {
     setTheme(nextTheme);
-    localStorage.setItem('aiverse-theme', nextTheme);
+    const root = document.documentElement;
+    root.dataset.themeTransition = 'true';
+    window.setTimeout(() => delete root.dataset.themeTransition, 220);
+    try {
+      localStorage.setItem('theme', nextTheme);
+      localStorage.removeItem('aiverse-theme');
+    } catch {}
   };
-  const cycleTheme = () => updateTheme(theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system');
+  const toggleTheme = () => updateTheme(dark ? 'light' : 'dark');
 
   const refresh = useCallback(async () => {
     try {
@@ -331,10 +356,10 @@ export default function App() {
   ];
   const passwordValid = passwordChecks.every(check => check.valid) && !/password|contraseña/i.test(passwordValue);
 
-  if (page === 'notFound') return <main className={dark?'app marketing-app dark':'app marketing-app'}><SiteHeader page={page} user={user} navigate={setPage}/><section className="not-found-page"><p className="eyebrow">ERROR 404 · RUTA NO DISPONIBLE</p><span className="not-found-code" aria-hidden="true">404</span><h1>No encontramos esta página.</h1><p>Puede que el enlace haya cambiado o que la dirección esté escrita de forma incorrecta.</p><button className="action" onClick={()=>setPage('home')}>Volver al inicio <span>→</span></button></section><SiteFooter navigate={setPage}/></main>;
+  if (page === 'notFound') return <main className={dark?'app marketing-app dark':'app marketing-app'}><SiteHeader page={page} user={user} navigate={setPage} theme={theme} dark={dark} onThemeToggle={toggleTheme} onThemeChange={updateTheme}/><section className="not-found-page"><p className="eyebrow">ERROR 404 · RUTA NO DISPONIBLE</p><span className="not-found-code" aria-hidden="true">404</span><h1>No encontramos esta página.</h1><p>Puede que el enlace haya cambiado o que la dirección esté escrita de forma incorrecta.</p><button className="action" onClick={()=>setPage('home')}>Volver al inicio <span>→</span></button></section><SiteFooter navigate={setPage}/></main>;
 
   if (page === 'feed') return <main className={dark?'app marketing-app dark':'app marketing-app'}>
-    <SiteHeader page={page} user={user} navigate={setPage}/>
+    <SiteHeader page={page} user={user} navigate={setPage} theme={theme} dark={dark} onThemeToggle={toggleTheme} onThemeChange={updateTheme}/>
     <section className="explore-hero"><p className="eyebrow">COMUNIDAD AIVERSE</p><h1>Explora proyectos<br/><span>hechos por desarrolladores.</span></h1><p>Busca repositorios públicos, conoce quién los crea y encuentra ideas para tu próximo proyecto.</p><div className="explore-search"><span>⌕</span><input value={feedSearch} onChange={event=>setFeedSearch(event.target.value)} placeholder="Buscar proyectos, personas o tecnologías" aria-label="Buscar repositorios"/><button onClick={()=>setFeedSearch('')} disabled={!feedSearch}>Limpiar</button></div><div className="explore-metrics" aria-live="polite"><span><b>{feedLoading?'…':feed.length}</b> repositorios públicos</span><span><b>{feedLoading?'…':new Set(feed.map(item=>item.username)).size}</b> desarrolladores</span><span>Actualizado desde la comunidad</span></div></section>
     <section className="explore-content"><div className="community-layout"><div><div className="community-composer"><p className="eyebrow">COMPARTE CON LA COMUNIDAD</p><h2>¿En qué estás trabajando?</h2>{user?<form onSubmit={event=>void publishPost(event)}><textarea maxLength={1200} value={postText} onChange={event=>setPostText(event.target.value)} placeholder="Comparte un avance, una pregunta o algo que aprendiste…"/><div><small>{postText.length}/1200</small><button className="action" disabled={postSubmitting||!postText.trim()}>{postSubmitting?'Publicando…':'Publicar'}</button></div>{postError&&<p className="form-error" role="alert">{postError}</p>}</form>:<><p>Inicia sesión para compartir avances, pedir ayuda y conversar sobre código.</p><button className="action" onClick={()=>setPage('login')}>Iniciar sesión para publicar</button></>}</div><div className="community-posts"><p className="eyebrow">CONVERSACIÓN RECIENTE</p>{postsLoading?<div className="feed-skeleton" role="status" aria-label="Cargando conversaciones"><i/><i/><i/></div>:postsError?<div className="feed-error" role="alert"><p>No se pudieron cargar las conversaciones: {postsError}</p><button onClick={()=>void loadPosts()}>Reintentar</button></div>:communityPosts.length?communityPosts.map(post=><article className="community-post" key={post.id}><div className="post-avatar">{post.display_name?.[0]?.toUpperCase()||'A'}</div><div><strong>{post.display_name||post.username}</strong><small>@{post.username} · {new Date(post.created_at).toLocaleString('es-CO')}</small><p>{post.text}</p></div></article>):<div className="explore-empty"><h3>Inicia la conversación</h3><p>Comparte tu primer avance o una pregunta técnica para activar la comunidad.</p></div>}</div></div><div><div className="explore-heading"><div><p className="eyebrow">DIRECTORIO</p><h2>Proyectos para explorar</h2><p>Repositorios públicos de la comunidad.</p></div><label className="sort-select">Orden<select value={feedSort} onChange={event=>setFeedSort(event.target.value as 'popular'|'recent')}><option value="popular">Populares</option><option value="recent">Recientes</option></select></label></div>
       <div className="explore-tags"><span>Prueba una búsqueda:</span>{['api','web','ia','typescript','open source'].map(term=><button key={term} onClick={()=>setFeedSearch(term)}>{term}</button>)}</div>
@@ -358,7 +383,7 @@ export default function App() {
       <p className="auth-switch">{page==='login'?'¿Primera vez en AIVerse?':'¿Ya tienes una cuenta?'} <button className="inline-button" onClick={()=>{setFormError('');setPasswordValue('');setPage(page==='login'?'register':'login')}}>{page==='login'?'Crea tu cuenta':'Inicia sesión'}</button></p><p className="auth-legal">Al continuar, aceptas nuestros <button onClick={()=>setPage('terms')}>términos de servicio</button> y <button onClick={()=>setPage('privacy')}>política de privacidad</button>.</p>
     </section></main>;
 
-  if (page === 'home' || page === 'account' || page === 'settings' || page === 'prs' || page === 'docs' || page === 'pricing' || page === 'terms' || page === 'privacy' || page === 'legal' || page === 'cookies') return <main className={dark?'app marketing-app dark':'app marketing-app'}><SiteHeader page={page} user={user} navigate={setPage}/>
+  if (page === 'home' || page === 'account' || page === 'settings' || page === 'prs' || page === 'docs' || page === 'pricing' || page === 'terms' || page === 'privacy' || page === 'legal' || page === 'cookies') return <main className={dark?'app marketing-app dark':'app marketing-app'}><SiteHeader page={page} user={user} navigate={setPage} theme={theme} dark={dark} onThemeToggle={toggleTheme} onThemeChange={updateTheme}/>
     {page==='settings'?<section className="product-page settings-page"><p className="eyebrow">TU ESPACIO</p><h1>Configuración</h1><p>Personaliza AIVerse para que se adapte a ti.</p><div className="settings-card"><label>Idioma de la interfaz<select onChange={event=>localStorage.setItem('aiverse-language',event.target.value)} defaultValue={localStorage.getItem('aiverse-language')??'es'}>{[['es','Español'],['en','English'],['fr','Français'],['de','Deutsch'],['pt','Português'],['ja','日本語']].map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></label><label>Tema<select value={theme} onChange={event=>updateTheme(event.target.value as Theme)}><option value="system">Automático · seguir el sistema</option><option value="light">Claro</option><option value="dark">Oscuro</option></select></label><p className="system-theme-note">Tu sistema está en modo <b>{systemDark?'oscuro':'claro'}</b>. {theme==='system'?'AIVerse seguirá ese ajuste automáticamente.':'El tema elegido se mantiene aunque cambie el sistema.'}</p></div><button className="secondary action" onClick={()=>setPage('account')}>Volver a mi cuenta</button></section>
     :page==='account'?<section className="product-page account-panel"><p className="eyebrow">PERFIL DE DESARROLLADOR</p><div className="account-heading"><span className="avatar">{user?.display_name?.[0]?.toUpperCase()??'A'}</span><div><h1>{user?.display_name??'Tu cuenta'}</h1><p>@{user?.username} · {user?.email}</p></div></div><div className="account-plan"><div><b>Plan Free</b><p>Hasta 3 repositorios · revisión con IA con tu propia clave</p></div><button className="action" onClick={()=>setPage('pricing')}>Ver planes</button></div><button className="secondary action" onClick={()=>setPage('settings')}>Editar preferencias</button></section>
     :page==='docs'?<DocumentationPage navigate={setPage}/>
@@ -370,7 +395,7 @@ export default function App() {
   return <main className={dark ? 'app dark' : 'app'}>
     <header>
       <div className="brand"><span className="logo"><AIVerseMark/></span><div><b>AIVerse</b><small>Tu espacio de desarrollo</small></div></div>
-      <div className="header-right"><span className={error ? 'connection offline' : 'connection'}>● {error ? 'Sin conexión' : 'Backend conectado'}</span><span className="branch">⌘ {status.branch}</span>{user&&<button className="workspace-nav" onClick={()=>setPage('settings')}>Configuración</button>}<button className="theme-cycle" onClick={cycleTheme} aria-label={`Tema ${theme==='system'?'automático':theme}; cambiar tema`}>{theme==='system'?'◐':dark?'☀':'☾'}<small>{theme==='system'?'Sistema':dark?'Oscuro':'Claro'}</small></button>{user&&<button className="workspace-account" onClick={()=>setPage('account')}>@{user.username}</button>}</div>
+      <div className="header-right"><span className={error ? 'connection offline' : 'connection'}>● {error ? 'Sin conexión' : 'Backend conectado'}</span><span className="branch">⌘ {status.branch}</span>{user&&<button className="workspace-nav" onClick={()=>setPage('settings')}>Configuración</button>}<ThemeControl theme={theme} dark={dark} onToggle={toggleTheme} onSelect={updateTheme} compact/>{user&&<button className="workspace-account" onClick={()=>setPage('account')}>@{user.username}</button>}</div>
     </header>
     {error && <div className="error-banner" role="alert"><span>{health?.sharedRepositoryApiEnabled === false ? error : `No se pudo conectar con AIVerse: ${error}`}</span><button onClick={()=>{setLoading(true);void refresh()}}>Reintentar</button></div>}
     {loading && <div className="workspace-loading" role="status" aria-live="polite"><span className="loading-spinner" aria-hidden="true"/><span>Conectando con tu espacio de trabajo…</span><div className="loading-track"><i/></div></div>}
@@ -480,7 +505,22 @@ function AIVerseMark() {
   return <svg className="aiverse-mark" viewBox="0 0 40 40" aria-hidden="true"><path d="M7 32 20 19 33 32M20 19V7"/><circle cx="7" cy="32" r="2.5"/><circle cx="33" cy="32" r="2.5"/><circle className="mark-core" cx="20" cy="19" r="3"/><circle cx="20" cy="7" r="2.5"/></svg>;
 }
 
-function SiteHeader({page, user, navigate}: {page: Page; user: {username:string}|null; navigate: (page: RoutePage)=>void}) {
+function ThemeControl({theme,dark,onToggle,onSelect,compact=false}: {theme:Theme;dark:boolean;onToggle:()=>void;onSelect:(theme:Theme)=>void;compact?:boolean}) {
+  const [open,setOpen] = useState(false);
+  const menuTrigger = useRef<HTMLButtonElement>(null);
+  const currentLabel = theme === 'system' ? `Sistema · ${dark?'oscuro':'claro'}` : theme === 'dark' ? 'Oscuro' : 'Claro';
+  const options: Array<{value:Theme;label:string}> = [{value:'system',label:'Sistema'},{value:'light',label:'Claro'},{value:'dark',label:'Oscuro'}];
+  return <div className={`theme-control${compact?' is-compact':''}`} onBlur={event=>{if(!event.currentTarget.contains(event.relatedTarget as Node|null))setOpen(false)}} onKeyDown={event=>{if(event.key==='Escape'){event.preventDefault();setOpen(false);menuTrigger.current?.focus()}}}>
+    <button type="button" className="theme-toggle" onClick={onToggle} aria-label={`Cambiar a tema ${dark?'claro':'oscuro'}. Tema actual: ${currentLabel}`} aria-pressed={dark} title={`Tema actual: ${currentLabel}`}>
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">{dark?<><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M4.93 4.93l1.42 1.42m11.3 11.3 1.42 1.42M2 12h2m16 0h2M4.93 19.07l1.42-1.42m11.3-11.3 1.42-1.42"/></>:<path d="M20.1 15.1A8.5 8.5 0 0 1 8.9 3.9 8.5 8.5 0 1 0 20.1 15.1Z"/>}</svg>
+      <span className="theme-current" aria-live="polite">{currentLabel}</span>
+    </button>
+    <button type="button" ref={menuTrigger} className="theme-menu-trigger" aria-label="Elegir preferencia de tema" aria-expanded={open} aria-controls="theme-options" onClick={()=>setOpen(value=>!value)}>⌄</button>
+    {open&&<div className="theme-menu" id="theme-options" role="group" aria-label="Preferencia de tema">{options.map(option=><button type="button" key={option.value} aria-pressed={theme===option.value} onClick={()=>{onSelect(option.value);setOpen(false)}}><span>{option.label}{option.value==='system'&&theme==='system'?` · ${dark?'oscuro':'claro'}`:''}</span>{theme===option.value&&<span aria-hidden="true">✓</span>}</button>)}</div>}
+  </div>;
+}
+
+function SiteHeader({page,user,navigate,theme,dark,onThemeToggle,onThemeChange}: {page:Page;user:{username:string}|null;navigate:(page:RoutePage)=>void;theme:Theme;dark:boolean;onThemeToggle:()=>void;onThemeChange:(theme:Theme)=>void}) {
   return <header className="site-header"><button className="wordmark" onClick={()=>navigate('home')}><AIVerseMark/><span>A<span className="wordmark-i">I</span>Verse</span></button><nav aria-label="Navegación principal"><button className={page==='home'?'active':''} onClick={()=>navigate('home')}>Inicio</button><button className={page==='feed'?'active':''} onClick={()=>navigate('feed')}>Comunidad</button><button className={page==='docs'?'active':''} onClick={()=>navigate('docs')}>Guías</button><button className={page==='pricing'?'active':''} onClick={()=>navigate('pricing')}>Planes</button></nav><div className="site-header-actions">{user?<button className="account-link" onClick={()=>navigate('account')}>@{user.username}</button>:<button className="site-login" onClick={()=>navigate('login')}>Iniciar sesión</button>}<button className="action site-cta" onClick={()=>navigate(user?'workspace':'register')}>{user?'Abrir espacio':'Crear mi espacio'} <span>→</span></button></div></header>;
 }
 

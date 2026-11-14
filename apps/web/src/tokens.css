@@ -1,0 +1,105 @@
+:root {
+  color-scheme: light dark;
+  --bg: #fbfaf7;
+  --bg-soft: #f4f2fa;
+  --surface: #fff;
+  --surface-raised: #fff;
+  --surface-glass: rgb(255 255 255 / 84%);
+  --surface-glass-soft: rgb(255 255 255 / 30%);
+  --surface-night: #202132;
+  --surface-terminal: #202132;
+  --border: #e7e7f0;
+  --border-strong: #dedbea;
+  --border-control: #5948bd;
+  --border-danger: #f3c7d0;
+  --text: #25263b;
+  --text-muted: #555566;
+  --text-subtle: #77798d;
+  --text-on-night: #d8daea;
+  --brand: #5948bd;
+  --brand-hover: #5542bc;
+  --brand-muted: #a69cf2;
+  --brand-contrast: #fff;
+  --accent-soft: #f0edff;
+  --accent-glow: #e8e4ff;
+  --success: #267650;
+  --success-soft: #e8f7ef;
+  --warning: #a06b20;
+  --warning-text: #555566;
+  --warning-soft: #fff3df;
+  --danger: #89354a;
+  --danger-soft: #fff0f2;
+  --diff-add: #edf8f1;
+  --diff-add-text: #426e58;
+  --diff-del: #fff0ef;
+  --diff-del-text: #8c5658;
+  --focus-ring: #5948bd;
+  --shadow-ink: rgb(41 33 72 / 11%);
+  --shadow: 0 24px 65px rgb(41 33 72 / 11%);
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #1c1d29;
+  --bg-soft: #20212f;
+  --surface: #29283a;
+  --surface-raised: #353448;
+  --surface-glass: rgb(41 40 58 / 84%);
+  --surface-glass-soft: rgb(41 40 58 / 30%);
+  --surface-night: #222132;
+  --surface-terminal: #171822;
+  --border: #454358;
+  --border-strong: #55536b;
+  --border-control: #a69cf2;
+  --border-danger: #6b3e4d;
+  --text: #f0eff6;
+  --text-muted: #c0bdcf;
+  --text-subtle: #bcbacb;
+  --text-on-night: #d8daea;
+  --brand: #a69cf2;
+  --brand-hover: #b9b2ff;
+  --brand-muted: #c6bdff;
+  --brand-contrast: #1c1d29;
+  --accent-soft: #302e43;
+  --accent-glow: #38334f;
+  --success: #89d2ad;
+  --success-soft: #222330;
+  --warning: #edc45a;
+  --warning-text: #edc45a;
+  --warning-soft: #36334f;
+  --danger: #ffbac7;
+  --danger-soft: #3c2e36;
+  --diff-add: #222330;
+  --diff-add-text: #89d2ad;
+  --diff-del: #3c2e36;
+  --diff-del-text: #ffbac7;
+  --focus-ring: #a69cf2;
+  --shadow-ink: rgb(41 33 72 / 32%);
+  --shadow: 0 24px 65px rgb(41 33 72 / 32%);
+}
+
+html[data-theme-transition="true"] *,
+html[data-theme-transition="true"] *::before,
+html[data-theme-transition="true"] *::after {
+  transition-property: color, background-color, border-color, box-shadow, fill, stroke;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-theme-transition="true"] *,
+  html[data-theme-transition="true"] *::before,
+  html[data-theme-transition="true"] *::after {
+    transition-duration: 0ms !important;
+  }
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
