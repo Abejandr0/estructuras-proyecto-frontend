@@ -73,6 +73,7 @@ export default function App() {
   const [output, setOutput] = useState<string[]>([]);
   const [aiTask, setAiTask] = useState<AITask | null>(null);
   const [aiQuestion, setAiQuestion] = useState('');
+  const [showMobileAI, setShowMobileAI] = useState(false);
   const [theme, setTheme] = useState<Theme>(() => {
     const stored = localStorage.getItem('aiverse-theme');
     return stored === 'dark' || stored === 'light' ? stored : 'system';
@@ -286,7 +287,7 @@ export default function App() {
 
   return <main className={dark ? 'app dark' : 'app'}>
     <header>
-      <div className="brand"><span className="logo">◈</span><div><b>AIVerse</b><small>{health?.root ?? 'Conectando al repositorio…'}</small></div></div>
+      <div className="brand"><span className="logo">◈</span><div><b>AIVerse</b><small>Tu espacio de desarrollo</small></div></div>
       <div className="header-right"><span className={error ? 'connection offline' : 'connection'}>● {error ? 'Sin conexión' : 'Backend conectado'}</span><span className="branch">⌘ {status.branch}</span>{user&&<button className="workspace-nav" onClick={()=>setPage('settings')}>Configuración</button>}<button className="theme-cycle" onClick={cycleTheme} aria-label={`Tema ${theme==='system'?'automático':theme}; cambiar tema`}>{theme==='system'?'◐':dark?'☀':'☾'}<small>{theme==='system'?'Sistema':dark?'Oscuro':'Claro'}</small></button>{user&&<button className="workspace-account" onClick={()=>setPage('account')}>@{user.username}</button>}</div>
     </header>
     {error && <div className="error-banner">No se pudo conectar con AIVerse: {error}. Ejecuta <code>npm run dev:server</code>.</div>}
@@ -308,8 +309,8 @@ export default function App() {
       <section className="center">
         <div className="workspace-overview">
           <div className="workspace-greeting">
-            <div><p className="workspace-kicker">TU ESPACIO DE TRABAJO</p><h1>{health?.root?.split('/').filter(Boolean).pop() || 'Tu proyecto'}</h1><p>Todo lo que necesitas para entender y hacer avanzar tu código.</p></div>
-            <div className="workspace-quick-actions"><button onClick={()=>setPage('feed')}>Explorar comunidad <span>↗</span></button><button className="quick-primary" onClick={()=>setPage('docs')}>Abrir guías <span>→</span></button></div>
+            <div><p className="workspace-kicker">TU ESPACIO DE TRABAJO</p><h1>Tu proyecto</h1><p>Todo lo que necesitas para entender y hacer avanzar tu código.</p></div>
+            <div className="workspace-quick-actions"><button className="mobile-ai-toggle" onClick={()=>setShowMobileAI(true)}>Abrir copiloto <span>✦</span></button><button onClick={()=>setPage('feed')}>Explorar comunidad <span>↗</span></button><button className="quick-primary" onClick={()=>setPage('docs')}>Abrir guías <span>→</span></button></div>
           </div>
           <div className="workspace-metrics">
             <article><span className="metric-icon violet">⌘</span><div><b>{log.length}</b><small>Commits</small></div></article>
@@ -332,19 +333,25 @@ export default function App() {
           {selectedChange ? <div className="diff-grid"><DiffColumn title="ANTES" text={selectedChange.oldText}/><DiffColumn title="DESPUÉS" text={selectedChange.newText}/></div> : <pre>{selected ? content : 'Selecciona un archivo para inspeccionarlo.'}</pre>}
         </div>
       </section>
-      <aside className="right">
+      <aside className={showMobileAI ? 'right mobile-ai-open' : 'right'}>
+        <button className="mobile-ai-close" onClick={()=>setShowMobileAI(false)}>Cerrar copiloto <span>×</span></button>
         <div className="ai-panel-heading"><span className="ai-spark">✦</span><div><b>Tu copiloto</b><small>IA conectada a este proyecto</small></div><span className="online">●</span></div>
         <div className="ai-welcome"><span>✧</span><b>¿Qué quieres descubrir?</b><p>Pregunta sobre tus cambios o pide una revisión. La IA utiliza el contexto real del repositorio.</p></div>
         <div className="ai-action-label">ACCIONES RÁPIDAS</div>
         <button className="action" onClick={() => void requestAI('review')} disabled={!changes.length}>Revisar {changes.length} cambio{changes.length === 1 ? '' : 's'}</button>
         <button className="action secondary" onClick={() => void requestAI('commit-msg')} disabled={!changes.length}>✦　Sugerir mensaje de commit</button>
-        <label className="ai-ask-label">PREGÚNTALE A AIVERSE<textarea value={aiQuestion} onChange={event=>setAiQuestion(event.target.value)} maxLength={1000} placeholder="Explícame este cambio, busca casos límite…"/></label>
+        <div className="ai-suggestions" aria-label="Preguntas sugeridas">
+          <button onClick={()=>setAiQuestion('Explícame qué hace este proyecto y cómo se conectan sus partes.')}>Entender el proyecto</button>
+          <button onClick={()=>setAiQuestion('¿Qué casos límite o riesgos debería revisar en estos cambios?')}>Buscar riesgos</button>
+          <button onClick={()=>setAiQuestion('¿Cuál sería un buen siguiente paso para mejorar este código?')}>Elegir siguiente paso</button>
+        </div>
+        <label className="ai-ask-label">PREGÚNTALE A AIVERSE<textarea value={aiQuestion} onChange={event=>setAiQuestion(event.target.value)} onKeyDown={event=>event.key==='Enter'&&(event.metaKey||event.ctrlKey)&&void requestAI('ask')} maxLength={1000} placeholder="Explícame este cambio, busca casos límite…"/><small className="ai-input-hint">⌘/Ctrl + Enter para enviar · {aiQuestion.length}/1000</small></label>
         <button className="action ai-submit" onClick={() => void requestAI('ask')} disabled={!aiQuestion.trim()}>Enviar pregunta <span>↑</span></button>
         <div className={`task-state ${aiTask?.state ?? ''}`}>{aiTask ? `${aiTask.state} · intento ${aiTask.attempts}` : 'Las respuestas aparecerán aquí'}</div>
         {aiTask&&<pre className="ai-result">{aiTask.result ?? aiTask.error ?? 'Preparando respuesta…'}</pre>}
         <div className="ai-provider-note"><span>✧</span> Modelo: {health?.provider ?? 'AIVerse'}</div>
-        <div className="inspector"><div className="panel-head">Data Structure Inspector</div><small>HashTable · buckets de objetos</small><div className="buckets">{buckets.slice(0, 32).map((count, index) => <div key={index} title={`Bucket ${index}: ${count}`} style={{height: Math.max(4, count * 12)}}/>)}</div><small>{buckets.length} buckets · {files.length} archivos confirmados</small></div>
-        <div className="panel-head state-heading">Estado</div><div className="stats"><span>{status.staged.length}<small>staged</small></span><span>{status.modified.length}<small>modificados</small></span><span>{status.untracked.length}<small>nuevos</small></span></div>
+        <div className="inspector"><div className="panel-head">Inspector de estructuras de datos</div><small>Tabla hash · índice del repositorio</small><div className="buckets">{buckets.slice(0, 32).map((count, index) => <div key={index} title={`Espacio ${index}: ${count}`} style={{height: Math.max(4, count * 12)}}/>)}</div><small>{buckets.length} espacios · {files.length} archivos versionados</small></div>
+        <div className="panel-head state-heading">Estado</div><div className="stats"><span>{status.staged.length}<small>preparados</small></span><span>{status.modified.length}<small>modificados</small></span><span>{status.untracked.length}<small>nuevos</small></span></div>
       </aside>
     </section>
     <section className="terminal"><div className="terminal-head"><span><i/> TERMINAL</span><small>Tu flujo, desde la terminal</small><button onClick={()=>setPage('docs')}>Ver comandos disponibles ↗</button></div><div className="terminal-body"><div className="terminal-history">{output.slice(0, 5).map((line, index) => <div key={index}>{line}</div>)}</div><div className="prompt"><b>aiverse ❯</b><input value={terminal} onChange={event => setTerminal(event.target.value)} onKeyDown={event => event.key === 'Enter' && void run()} placeholder="status, add ., commit -m mensaje"/><button onClick={() => void run()}>↵</button></div></div></section>
