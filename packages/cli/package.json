@@ -1,1 +1,1 @@
-{"name":"@minigit/cli","version":"0.1.0","type":"module","bin":{"minigit":"dist/index.js"},"scripts":{"build":"tsc -p tsconfig.json"},"dependencies":{"@minigit/core":"0.1.0"}}
+{"name":"@aiverse/cli","version":"0.1.0","type":"module","bin":{"aiverse":"dist/index.js"},"scripts":{"build":"tsc -p tsconfig.json"},"dependencies":{"@aiverse/core":"0.1.0"}}

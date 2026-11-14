@@ -1,5 +1,5 @@
 import path from 'node:path';
-import {Repository} from '@minigit/core';
+import {Repository} from '@aiverse/core';
 
 export interface RepositoryResolutionOptions { cwd?: string; initCwd?: string; explicitRoot?: string; autoInit?: boolean; }
 

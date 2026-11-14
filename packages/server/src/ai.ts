@@ -1,6 +1,6 @@
-import {Queue} from '@minigit/core';
+import {Queue} from '@aiverse/core';
 
-export type AITaskKind = 'review' | 'commit-msg' | 'resolve';
+export type AITaskKind = 'review' | 'commit-msg' | 'resolve' | 'ask';
 export type AITaskState = 'pending' | 'processing' | 'ready' | 'error';
 
 export interface AITask {
@@ -19,6 +19,7 @@ export interface AIProvider { run(kind: AITaskKind, input: string): Promise<stri
 
 export class HeuristicAIProvider implements AIProvider {
   async run(kind: AITaskKind, input: string): Promise<string> {
+    if (kind === 'ask') return 'La IA externa no está configurada. Pide al administrador que habilite un proveedor para conversar sobre tu código.';
     if (kind === 'commit-msg') {
       const changed = input.match(/^diff --/gm)?.length ?? 0;
       return changed > 0 ? `Actualiza ${changed} archivo${changed === 1 ? '' : 's'}` : 'Actualiza el proyecto';
@@ -41,6 +42,7 @@ export class OpenAIProvider implements AIProvider {
       review: 'Revisa este diff. Devuelve hallazgos concretos, priorizados y breves en español.',
       'commit-msg': 'Escribe un mensaje de commit imperativo, claro y de máximo 72 caracteres.',
       resolve: 'Propón una resolución segura para estos conflictos. Explica qué líneas conservar.',
+      ask: 'Eres el asistente de AIVerse. Responde en español, explica con claridad, usa el contexto de código proporcionado, sugiere siguientes pasos concretos y nunca afirmes que modificaste archivos.',
     };
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -62,6 +64,7 @@ export class GeminiProvider implements AIProvider {
       review: 'Revisa este diff como senior engineer. Devuelve solo hallazgos concretos y priorizados en español.',
       'commit-msg': 'Propón un mensaje de commit imperativo de máximo 72 caracteres.',
       resolve: 'Analiza los conflictos y propone una resolución explicando los riesgos.',
+      ask: 'Eres el asistente de AIVerse. Responde en español, explica con claridad, usa el contexto de código proporcionado, sugiere siguientes pasos concretos y nunca afirmes que modificaste archivos.',
     };
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(this.model)}:generateContent?key=${encodeURIComponent(this.apiKey)}`, {
       method: 'POST', headers: {'Content-Type': 'application/json'},

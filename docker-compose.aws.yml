@@ -12,6 +12,11 @@ services:
       AI_ALLOW_NETWORK: ${AI_ALLOW_NETWORK:-false}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      MP_ACCESS_TOKEN: ${MP_ACCESS_TOKEN:-}
+      MP_WEBHOOK_SECRET: ${MP_WEBHOOK_SECRET:-}
+      MP_PRICE_STARTER_COP: ${MP_PRICE_STARTER_COP:-3300}
+      MP_PRICE_PLUS_COP: ${MP_PRICE_PLUS_COP:-26500}
+      MP_PRICE_PRO_COP: ${MP_PRICE_PRO_COP:-59600}
       WEB_ORIGIN: https://${AIVERSE_DOMAIN:?Set AIVERSE_DOMAIN in .env}
     volumes:
       - aiverse-repositories:/srv/aiverse

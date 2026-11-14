@@ -1,6 +1,6 @@
 {
   "framework": "vite",
   "installCommand": "npm ci",
-  "buildCommand": "npm run build -w @minigit/web",
+  "buildCommand": "npm run build -w @aiverse/web",
   "outputDirectory": "apps/web/dist"
 }

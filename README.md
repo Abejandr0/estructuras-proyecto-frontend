@@ -1,4 +1,4 @@
-# MiniGit
+# AIVerse
 
 MiniGit es un control de versiones local en TypeScript, organizado como monorepo. El motor almacena blobs, árboles y commits identificados con SHA-1 de `tipo tamaño\0contenido` y comprimidos con zlib en `.minigit/objects`; mantiene staging en `index`, ramas en `refs/heads`, HEAD simbólico y un reflog básico. El objeto vuelve a verificarse por hash y tamaño al leerlo.
 
@@ -42,7 +42,18 @@ Las sesiones usan cookies `Secure` y CORS con credenciales. Si la consola muestr
 
 Los planes Plus y Pro se presentan como próximos planes sin pagos activos. El backend aplica el límite actual de repositorios por plan: Free 3, Plus 20 y Pro ilimitado. Los textos legales de beta requieren añadir el nombre legal y el canal de soporte del operador antes de abrir el registro al público.
 
-CLI: `minigit init`, `add`, `commit`, `status`, `log`, `branch`, `checkout`, `merge`, `stash`, `reset`, `revert`, `serve`, `clone`, `push`, `pull`. Para remoto, inicia `minigit serve` dentro del repo del servidor y usa la URL HTTP en clone/push/pull.
+CLI: `aiverse init`, `add`, `commit`, `status`, `log`, `branch`, `checkout`, `merge`, `stash`, `reset`, `revert`, `serve`, `clone`, `push`, `pull`. En este checkout puedes compilarlo con `npm run build` y enlazar el comando con `npm link --workspace @aiverse/cli`; después usa `aiverse init` en un proyecto. El transporte remoto actual usa los endpoints HTTP de AIVerse: `aiverse clone <url> <directorio>` y, dentro de un repositorio, `aiverse push <url>` o `aiverse pull <url>`.
+
+### Suscripciones con Mercado Pago (Colombia)
+
+La página de planes inicia suscripciones mensuales en COP mediante Mercado Pago y el backend activa el nivel después de validar el webhook `subscription_preapproval`. Para probarlo:
+
+1. Crea una aplicación en **Tus integraciones** de Mercado Pago y copia las credenciales de prueba. Configura `MP_ACCESS_TOKEN` sólo en el backend.
+2. Configura `MP_WEBHOOK_SECRET` con la firma secreta generada para Webhooks y registra `https://TU_DOMINIO/api/billing/webhook`, con el evento de suscripción (`subscription_preapproval`).
+3. Configura los precios mensuales en pesos: `MP_PRICE_STARTER_COP=3300`, `MP_PRICE_PLUS_COP=26500`, `MP_PRICE_PRO_COP=59600`. Son valores iniciales editables; Starter se aproxima a USD 1 según una tasa de referencia, pero Mercado Pago cobrará COP.
+4. Despliega el backend y prueba el flujo con usuarios/tarjetas de prueba de Mercado Pago. Cambia `MP_ACCESS_TOKEN` a la credencial de producción sólo al estar listo para cobrar dinero real.
+
+No publiques el access token ni la firma del webhook. El nivel se asigna tras consultar la suscripción directamente a Mercado Pago desde el webhook firmado; la URL de regreso del checkout no activa el plan por sí sola.
 
 ## Arquitectura y persistencia
 

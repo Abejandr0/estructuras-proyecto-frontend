@@ -2,7 +2,7 @@ import 'dotenv/config';
 import {createServer} from 'node:http';
 import path from 'node:path';
 import {mkdir} from 'node:fs/promises';
-import {randomUUID} from 'node:crypto';
+import {createHmac, randomUUID, timingSafeEqual} from 'node:crypto';
 import {watch} from 'node:fs';
 import express from 'express';
 import cookieParser from 'cookie-parser';
@@ -12,7 +12,7 @@ import {WebSocketServer, WebSocket} from 'ws';
 import type {AITask, AITaskKind} from './ai.js';
 import {AITaskQueue, GeminiProvider, OpenAIProvider} from './ai.js';
 import {resolveRepository} from './repository-root.js';
-import {Repository} from '@minigit/core';
+import {Repository} from '@aiverse/core';
 import {activities, database, initializeDatabase, pullRequests, repositories, reviews, users} from './database.js';
 import {createAccount, createSession, currentUser, destroySession, login, requireCsrf} from './auth.js';
 
@@ -48,6 +48,36 @@ const aiTasks = new AITaskQueue(provider, Number(process.env.AI_CONCURRENCY ?? 2
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(helmet({crossOriginResourcePolicy: {policy: 'same-site'}}));
+app.post('/api/billing/webhook', express.raw({type: 'application/json'}), async (request, response, next) => {
+  try {
+    const secret = process.env.MP_WEBHOOK_SECRET;
+    const signature = request.get('x-signature') ?? '';
+    const requestId = request.get('x-request-id') ?? '';
+    const dataId = String(request.query['data.id'] ?? request.query.id ?? '').toLowerCase();
+    if (!secret || !users) { response.sendStatus(503); return; }
+    const parts = Object.fromEntries(signature.split(',').map(part => part.trim().split('=')));
+    const timestamp = parts.ts ?? '';
+    const manifest = `${dataId ? `id:${dataId};` : ''}${requestId ? `request-id:${requestId};` : ''}${timestamp ? `ts:${timestamp};` : ''}`;
+    const expected = createHmac('sha256', secret).update(manifest).digest('hex');
+    const received = parts.v1 ?? '';
+    if (!dataId || !timestamp || !requestId || Math.abs(Date.now() - Number(timestamp)) > 5 * 60_000 || received.length !== expected.length || !timingSafeEqual(Buffer.from(received), Buffer.from(expected))) { response.sendStatus(401); return; }
+    const notification = Buffer.isBuffer(request.body) ? JSON.parse(request.body.toString('utf8')) as {type?:string;action?:string} : request.body as {type?:string;action?:string};
+    if (notification.type === 'subscription_preapproval' || notification.action?.startsWith('subscription_preapproval')) {
+      const accessToken = process.env.MP_ACCESS_TOKEN;
+      if (!accessToken) { response.sendStatus(503); return; }
+      const result = await fetch(`https://api.mercadopago.com/preapproval/${encodeURIComponent(dataId)}`, {headers: {Authorization: `Bearer ${accessToken}`}});
+      if (!result.ok) { response.sendStatus(502); return; }
+      const subscription = await result.json() as {id:string; status:string; external_reference?:string; payer_email?:string};
+      const [userId, plan] = (subscription.external_reference ?? '').split(':');
+      if (userId && ['starter','plus','pro'].includes(plan ?? '')) {
+        await users.updateOne({id:userId}, {$set: {plan: subscription.status === 'authorized' ? plan : 'free', mpSubscriptionId: subscription.id, mpSubscriptionStatus: subscription.status, planUpdatedAt: new Date()}});
+      } else if (subscription.status === 'cancelled') {
+        await users.updateOne({mpSubscriptionId: subscription.id}, {$set: {plan:'free', mpSubscriptionStatus:'cancelled', planUpdatedAt:new Date()}});
+      }
+    }
+    response.sendStatus(200);
+  } catch (error) { next(error); }
+});
 app.use(express.json({limit: '2mb'}));
 app.use(cookieParser());
 app.use((request, response, next) => {
@@ -113,6 +143,29 @@ app.get('/api/auth/me', async (request, response, next) => {
   catch (error) { next(error); }
 });
 
+app.get('/api/billing/status', (_request, response) => response.json({enabled: Boolean(process.env.MP_ACCESS_TOKEN && process.env.MP_WEBHOOK_SECRET && process.env.MP_PRICE_STARTER_COP && process.env.MP_PRICE_PLUS_COP && process.env.MP_PRICE_PRO_COP)}));
+app.post('/api/billing/checkout', async (request, response, next) => {
+  try {
+    if (!requireCsrf(request, response)) return;
+    const user = await currentUser(request);
+    if (!user) { response.status(401).json({error: 'Inicia sesión para elegir un plan.'}); return; }
+    const plan = request.body?.plan;
+    if (plan !== 'starter' && plan !== 'plus' && plan !== 'pro') { response.status(400).json({error: 'Plan no válido.'}); return; }
+    const accessToken = process.env.MP_ACCESS_TOKEN;
+    const amount = Number(process.env[plan === 'starter' ? 'MP_PRICE_STARTER_COP' : plan === 'plus' ? 'MP_PRICE_PLUS_COP' : 'MP_PRICE_PRO_COP']);
+    if (!accessToken || !Number.isFinite(amount) || amount < 100) { response.status(503).json({error: 'Mercado Pago no está configurado todavía.'}); return; }
+    const origin = (process.env.WEB_ORIGIN ?? '').split(',').map(value => value.trim()).filter(Boolean)[0];
+    if (!origin) { response.status(503).json({error: 'Falta configurar WEB_ORIGIN para iniciar el pago.'}); return; }
+    const checkout = await fetch('https://api.mercadopago.com/preapproval', {method:'POST', headers:{Authorization:`Bearer ${accessToken}`, 'Content-Type':'application/json'},
+      body:JSON.stringify({reason:`AIVerse ${plan[0]!.toUpperCase()}${plan.slice(1)} mensual`, external_reference:`${user.id}:${plan}`, payer_email:user.email,
+        auto_recurring:{frequency:1,frequency_type:'months',transaction_amount:amount,currency_id:'COP'}, back_url:`${origin}/#/account?billing=return`})});
+    const result = await checkout.json() as {init_point?:string; sandbox_init_point?:string; message?:string; error?:string};
+    const checkoutUrl = accessToken.startsWith('TEST-') ? result.sandbox_init_point ?? result.init_point : result.init_point;
+    if (!checkout.ok || !checkoutUrl) { response.status(502).json({error:result.message??result.error??'Mercado Pago no pudo iniciar la suscripción.'}); return; }
+    response.json({url:checkoutUrl});
+  } catch (error) { next(error); }
+});
+
 app.get('/api/feed', async (_request, response, next) => {
   try {
     if (!repositories || !users) { response.status(503).json({error: 'Configura MONGODB_URI para habilitar el feed.'}); return; }
@@ -121,6 +174,29 @@ app.get('/api/feed', async (_request, response, next) => {
     const ownerById = new Map(owners.map(owner => [owner.id, owner]));
     response.json({repositories: items.map(item => ({id: item.id, name: item.name, description: item.description, stars_count: item.starsCount, created_at: item.createdAt,
       username: ownerById.get(item.ownerId)?.username ?? 'unknown', display_name: ownerById.get(item.ownerId)?.display_name ?? ''}))});
+  } catch (error) { next(error); }
+});
+app.get('/api/feed/posts', async (_request, response, next) => {
+  try {
+    if (!activities || !users) { response.status(503).json({error: 'Configura MONGODB_URI para habilitar la comunidad.'}); return; }
+    const posts = await activities.find({kind: 'community_post'}).sort({createdAt: -1}).limit(60).toArray();
+    const authors = await users.find({id: {$in: posts.map(post => post.actorId)}}).project({id: 1, username: 1, display_name: 1}).toArray();
+    const byId = new Map(authors.map(author => [author.id, author]));
+    response.json({posts: posts.map(post => ({id: post.id, text: post.payload?.text, created_at: post.createdAt,
+      username: byId.get(post.actorId)?.username ?? 'unknown', display_name: byId.get(post.actorId)?.display_name ?? ''}))});
+  } catch (error) { next(error); }
+});
+app.post('/api/feed/posts', async (request, response, next) => {
+  try {
+    if (!requireCsrf(request, response)) return;
+    if (!activities) { response.status(503).json({error: 'Configura MONGODB_URI para publicar.'}); return; }
+    const user = await currentUser(request);
+    if (!user) { response.status(401).json({error: 'Inicia sesión para publicar.'}); return; }
+    const text = typeof request.body?.text === 'string' ? request.body.text.trim() : '';
+    if (!text || text.length > 1200) { response.status(400).json({error: 'La publicación debe tener entre 1 y 1200 caracteres.'}); return; }
+    const post = {id: randomUUID(), actorId: user.id, kind: 'community_post', payload: {text}, createdAt: new Date()};
+    await activities.insertOne(post);
+    response.status(201).json({post: {...post, username: user.username, display_name: user.display_name}});
   } catch (error) { next(error); }
 });
 app.post('/api/repositories', async (request, response, next) => {
@@ -133,7 +209,7 @@ app.post('/api/repositories', async (request, response, next) => {
     const description = typeof request.body?.description === 'string' ? request.body.description.trim() : '';
     if (!/^[A-Za-z0-9._-]{1,100}$/.test(name) || description.length > 350) { response.status(400).json({error: 'Nombre o descripción no válidos.'}); return; }
     const plan = String(user.plan ?? 'free');
-    const repositoryLimit = plan === 'pro' ? Infinity : plan === 'plus' ? 20 : 3;
+    const repositoryLimit = plan === 'pro' ? Infinity : plan === 'plus' ? 20 : plan === 'starter' ? 10 : 3;
     const quotaFilter = repositoryLimit === Infinity ? {id: user.id} : {id: user.id, $expr: {$lt: [{$ifNull: ['$repositoryCount', 0]}, repositoryLimit]}};
     const quotaReservation = await users.updateOne(quotaFilter, {$inc: {repositoryCount: 1}});
     if (!quotaReservation.modifiedCount) { response.status(403).json({error: `Tu plan ${plan} permite hasta ${repositoryLimit} repositorios. Actualiza tu plan para crear más.`}); return; }
@@ -219,7 +295,7 @@ app.get('/api/ai/tasks/:id', (request, response) => {
 });
 app.post('/api/ai/:kind', (request, response) => {
   const kind = request.params.kind as AITaskKind;
-  if (!['review', 'commit-msg', 'resolve'].includes(kind)) { response.status(404).json({error: 'Unknown AI task'}); return; }
+  if (!['review', 'commit-msg', 'resolve', 'ask'].includes(kind)) { response.status(404).json({error: 'Unknown AI task'}); return; }
   response.status(202).json(aiTasks.enqueue(kind, request.body.diff ?? request.body.text ?? ''));
 });
 

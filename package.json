@@ -1,5 +1,5 @@
 {
-  "name": "minigit",
+  "name": "aiverse",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -8,11 +8,11 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w @minigit/core && npm run build -w @minigit/cli && npm run build -w @minigit/server && npm run build -w @minigit/web",
+    "build": "npm run build -w @aiverse/core && npm run build -w @aiverse/cli && npm run build -w @aiverse/server && npm run build -w @aiverse/web",
     "test": "vitest run",
     "bench": "tsx benchmarks/run.ts",
-    "dev:server": "npm run dev -w @minigit/server",
-    "dev:web": "npm run dev -w @minigit/web"
+    "dev:server": "npm run dev -w @aiverse/server",
+    "dev:web": "npm run dev -w @aiverse/web"
   },
   "devDependencies": {
     "@types/cookie-parser": "^1.4.10",
